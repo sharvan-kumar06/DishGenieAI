@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+:root {
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #faf8f5;
+  color: #1c1917;
+  overflow-x: hidden;
+}
+
+/* Custom subtle animation utilities */
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.animate-float {
+  animation: floatSlow 4s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.05);
+  }
+}
+
+.animate-glow {
+  animation: pulseGlow 5s ease-in-out infinite;
+}
+
+@keyframes simmer {
+  0%, 100% {
+    transform: rotate(0deg) scale(1);
+  }
+  25% {
+    transform: rotate(-3deg) scale(1.02);
+  }
+  75% {
+    transform: rotate(3deg) scale(0.98);
+  }
+}
+
+.animate-simmer {
+  animation: simmer 2.5s ease-in-out infinite;
+}
+
+/* Print Friendly Stylesheet */
+@media screen {
+  .print-only {
+    display: none !important;
+  }
+}
+
+@media print {
+  header, nav, footer, .no-print, button, input {
+    display: none !important;
+  }
+  
+  .print-only {
+    display: block !important;
+  }
+
+  body {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    font-size: 12pt !important;
+  }
+
+  .print-page {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  /* Remove colored backgrounds for economical printing */
+  .bg-white, .bg-stone-50, .bg-amber-50, .bg-orange-50 {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  /* Prevent page breaks inside cards */
+  .page-break-inside-avoid, .print-card {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}
+

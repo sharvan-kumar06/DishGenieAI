@@ -1,0 +1,23 @@
+# AI models
+*.keras
+*.h5
+*.tflite
+
+# Dependencies and build output
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Test images
+test_*.jpg
+test_*.png
