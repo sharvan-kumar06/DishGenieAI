@@ -1,5 +1,5 @@
 # AI models
-*.keras
+
 *.h5
 *.tflite
 

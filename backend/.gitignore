@@ -25,5 +25,5 @@ venv/
 ENV/
 *.log
 .pytest_cache/
-*.keras
+
 
