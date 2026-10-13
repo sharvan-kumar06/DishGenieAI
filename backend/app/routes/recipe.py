@@ -13,8 +13,8 @@ router = APIRouter(prefix="/api/recipe", tags=["Recipe Generation"])
     "/generate",
     response_model=RecipeResponse,
     status_code=status.HTTP_200_OK,
-    summary="Generate recipe using local Generative AI",
-    description="Accepts confirmed ingredients and preferences, prompts local FLAN-T5 model, and returns structured recipe instructions.",
+    summary="Generate recipe using local Generative AI and Recipe Database",
+    description="Accepts confirmed ingredients and preferences, retrieves matching database recipes, prompts local Qwen2.5 model, and returns structured recipe instructions.",
 )
 async def generate_recipe(
     request: RecipeRequest,

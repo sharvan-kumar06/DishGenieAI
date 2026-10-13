@@ -56,7 +56,7 @@ export default function Features() {
         {/* Informative Note for PBL Demonstration */}
         <div className="mt-12 text-center px-2">
           <p className="text-xs text-stone-600 bg-stone-50 border border-stone-200 inline-block px-4 py-2.5 rounded-2xl sm:rounded-full max-w-full text-left sm:text-center leading-relaxed">
-            💡 Powered by a trained TensorFlow CNN and local FLAN-T5 model running on-device for this college PBL project.
+            💡 Powered by a trained TensorFlow CNN, local SQLite recipe database, and Qwen2.5 model running on-device for this college PBL project.
           </p>
         </div>
 

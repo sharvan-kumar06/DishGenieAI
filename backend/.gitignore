@@ -26,4 +26,10 @@ ENV/
 *.log
 .pytest_cache/
 
-
+# Local databases and raw datasets
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.csv
+data/dishgenie_recipes.db

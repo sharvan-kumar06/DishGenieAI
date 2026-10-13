@@ -959,7 +959,7 @@ export default function Detect() {
             </div>
 
             <p className="text-[11px] text-stone-400">
-              Running locally on-device via FLAN-T5 model without cloud AI APIs.
+              Running locally on-device via Qwen2.5 model and SQLite database without cloud AI APIs.
             </p>
           </div>
         </div>

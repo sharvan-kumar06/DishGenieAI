@@ -259,7 +259,7 @@ export default function Recipe() {
             <span>AI Generated Recipe</span>
           </span>
           <span className="text-xs text-stone-400 font-mono hidden md:inline">
-            Local FLAN-T5 Model
+            Local Qwen2.5 & SQLite DB
           </span>
         </div>
       </div>
@@ -665,7 +665,7 @@ export default function Recipe() {
                 Generated Recipe
               </h2>
               <p className="text-xs text-stone-500">
-                Direct narrative output from the local FLAN-T5 model
+                Direct narrative output from the local Qwen2.5 model
               </p>
             </div>
           </div>

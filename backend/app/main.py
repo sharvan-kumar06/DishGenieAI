@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes.recipe import router as recipe_router
 from app.routes.vision import router as vision_router
 from app.schemas.vision import HealthResponse, ServiceStatus, ServicesStatus
+from app.services.recipe_database import get_recipe_database
 from app.services.recipe_service import RecipeService, get_recipe_service
 from app.services.vision_service import VisionService, get_vision_service
 
@@ -24,9 +25,9 @@ logger = logging.getLogger("dishgenie")
 async def lifespan(app: FastAPI):
     """
     Lifespan event handler to ensure fail-fast model loading once on startup.
-    Loads both VisionService (CNN) and RecipeService (FLAN-T5) into memory once.
+    Loads VisionService (CNN), RecipeDatabase (SQLite), and RecipeService (Qwen2.5) into memory.
     """
-    logger.info("Initializing DishGenie backend AI services...")
+    logger.info("Initializing DishGenie backend AI and Database services...")
     
     # 1. Load Vision CNN service
     try:
@@ -38,7 +39,17 @@ async def lifespan(app: FastAPI):
         logger.critical(f"FATAL: Failed to initialize VisionService at startup: {exc}", exc_info=True)
         raise exc
 
-    # 2. Load Recipe Local GenAI service
+    # 2. Check Recipe Database
+    try:
+        recipe_db = get_recipe_database()
+        recipe_count = recipe_db.count_recipes()
+        logger.info(
+            f"RecipeDatabase initialized: {recipe_count:,} recipes indexed in SQLite at {recipe_db.db_path.name}."
+        )
+    except Exception as exc:
+        logger.warning(f"RecipeDatabase initialization warning: {exc}")
+
+    # 3. Load Recipe Local GenAI service
     try:
         recipe_svc = get_recipe_service()
         logger.info(
@@ -56,7 +67,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI application instance
 app = FastAPI(
     title="DishGenie API",
-    description="Production-ready backend API for DishGenie - CNN Ingredient Detection & Local FLAN-T5 Recipe Services",
+    description="Production-ready backend API for DishGenie - CNN Ingredient Detection & Local Qwen2.5 + SQLite Recipe Services",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",

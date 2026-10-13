@@ -137,7 +137,7 @@ export default function RecipeRequestModal({
             Local GenAI Payload Architecture
           </p>
           <p className="mt-1 text-orange-800">
-            This structured request object is sent directly to the local FLAN-T5 GenAI model endpoint to synthesize step-by-step cooking instructions, substitutions, and shopping lists.
+            This structured request object is sent directly to the local Qwen2.5 GenAI and SQLite recipe database endpoint to synthesize step-by-step cooking instructions, substitutions, and shopping lists.
           </p>
         </div>
 

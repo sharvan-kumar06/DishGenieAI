@@ -41,9 +41,9 @@ export default function AboutPage() {
       badgeColor: 'bg-orange-100 text-orange-800',
     },
     {
-      layer: 'Generative AI Engine',
-      tools: ['Hugging Face Transformers', 'FLAN-T5 Base', 'PyTorch (CPU/CUDA)', 'SentencePiece'],
-      description: 'Seq2Seq language model executing 100% on-device to synthesize customized cooking steps, substitutions, and shopping lists without cloud APIs.',
+      layer: 'Generative AI & Recipe DB',
+      tools: ['Hugging Face Transformers', 'Qwen2.5-3B-Instruct', 'SQLite FTS5', 'PyTorch'],
+      description: 'Pretrained causal language model combined with persistent SQLite database retrieval (RAG) to synthesize customized recipes without external APIs.',
       color: 'border-purple-200 bg-purple-50/50',
       badgeColor: 'bg-purple-100 text-purple-800',
     },
@@ -83,7 +83,7 @@ export default function AboutPage() {
     {
       title: '100% Local AI Processing',
       icon: Cpu,
-      description: 'Both the CNN model and the FLAN-T5 language model run on your local machine—zero paid APIs, zero subscriptions, complete privacy.',
+      description: 'Both the CNN model and the Qwen2.5 language model run on your local machine—zero paid APIs, complete privacy.',
     },
   ]
 
@@ -140,12 +140,12 @@ export default function AboutPage() {
                 2
               </div>
               <div>
-                <h3 className="font-extrabold text-stone-900 text-base">Stage 2: Generative AI</h3>
-                <span className="text-xs text-amber-800 font-medium">Local FLAN-T5 Language Synthesis</span>
+                <h3 className="font-extrabold text-stone-900 text-base">Stage 2: Generative AI & Recipe DB</h3>
+                <span className="text-xs text-amber-800 font-medium">Local Qwen2.5 Language Synthesis & SQLite</span>
               </div>
             </div>
             <p className="text-sm text-stone-600 leading-relaxed">
-              Uses confirmed ingredients and dietary parameters to synthesize complete culinary recipes, instructions, substitutions, and shopping checklists.
+              Retrieves matched recipes from the local SQLite database and uses Qwen2.5 to synthesize complete culinary recipes, instructions, substitutions, and shopping checklists.
             </p>
           </div>
         </div>
@@ -232,7 +232,7 @@ export default function AboutPage() {
               </span>
               <h4 className="font-extrabold text-stone-900 text-sm">Recipe Generation Service</h4>
               <p className="text-xs text-stone-600">
-                Local FLAN-T5 Transformers model synthesizes tailored cooking steps
+                Local Qwen2.5 model and SQLite database synthesize tailored cooking steps
               </p>
             </div>
 

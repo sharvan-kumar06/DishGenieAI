@@ -447,7 +447,7 @@ export async function predictIngredient(file) {
 }
 
 /**
- * Synthesizes a recipe using confirmed ingredients and preferences via the local FLAN-T5 GenAI service.
+ * Synthesizes a recipe using confirmed ingredients and preferences via local Qwen2.5 GenAI and SQLite recipe database.
  *
  * @param {{ ingredients: string[], preferences: { diet: string, cuisine: string, cookingTime: number, difficulty: string, servings: number, additionalIngredients?: string } }} payload
  * @returns {Promise<{ success: boolean, recipe: Object | null, raw_text: string | null }>}

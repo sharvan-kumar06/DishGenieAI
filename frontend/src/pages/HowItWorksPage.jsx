@@ -65,8 +65,8 @@ export default function HowItWorksPage() {
       tag: 'On-Device Synthesis',
       icon: Sparkles,
       description:
-        'Your verified pantry ingredients and preference parameters are formatted into a structured prompt and passed to a local FLAN-T5 language model running directly in Python via Hugging Face Transformers.',
-      notes: 'Zero external cloud APIs: All text generation executes on-device without OpenAI, Gemini, or third-party cloud costs.',
+        'Your verified pantry ingredients and preference parameters are passed to our local SQLite recipe database for candidate retrieval, then synthesized by a pretrained Qwen2.5-3B model running directly in Python via Hugging Face Transformers.',
+      notes: 'Zero external cloud APIs: All retrieval and text generation execute on-device without OpenAI, Gemini, or third-party cloud costs.',
     },
     {
       step: '06',
