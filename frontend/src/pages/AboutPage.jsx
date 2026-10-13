@@ -42,7 +42,7 @@ export default function AboutPage() {
     },
     {
       layer: 'Generative AI & Recipe DB',
-      tools: ['Hugging Face Transformers', 'Qwen2.5-3B-Instruct', 'SQLite FTS5', 'PyTorch'],
+      tools: ['Hugging Face Transformers', 'Qwen2.5-1.5B-Instruct', 'SQLite FTS5', 'PyTorch'],
       description: 'Pretrained causal language model combined with persistent SQLite database retrieval (RAG) to synthesize customized recipes without external APIs.',
       color: 'border-purple-200 bg-purple-50/50',
       badgeColor: 'bg-purple-100 text-purple-800',

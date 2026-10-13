@@ -11,13 +11,13 @@ from app.services.recipe_retriever import RecipeRetriever, get_recipe_retriever
 
 logger = logging.getLogger(__name__)
 
-# Pretrained Qwen2.5-3B-Instruct model ID
-DEFAULT_GENAI_MODEL = os.getenv("GENAI_MODEL", "Qwen/Qwen2.5-3B-Instruct")
+# Pretrained Qwen2.5-1.5B-Instruct model ID (optimized for fast CPU/local memory footprint)
+DEFAULT_GENAI_MODEL = os.getenv("GENAI_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
 
 
 class RecipeService:
     """
-    Local Generative AI service for recipe synthesis using pretrained Qwen2.5-3B-Instruct
+    Local Generative AI service for recipe synthesis using pretrained Qwen2.5-1.5B-Instruct
     combined with persistent SQLite recipe database retrieval (RAG).
     Runs purely locally on CPU/CUDA without fine-tuning or external APIs.
     """
@@ -53,8 +53,8 @@ class RecipeService:
                 trust_remote_code=True,
             )
 
-            # Use float32 on CPU, bfloat16/float16 on CUDA
-            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            # Use float16 on CUDA, bfloat16 on CPU for 50% memory savings and faster compute
+            dtype = torch.float16 if torch.cuda.is_available() else torch.bfloat16
 
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
@@ -65,7 +65,7 @@ class RecipeService:
             self.model.to(self.device)
             self.model.eval()
             logger.info(
-                f"[RecipeService] Successfully loaded '{self.model_name}' on device '{self.device}'."
+                f"[RecipeService] Successfully loaded '{self.model_name}' on device '{self.device}' with dtype '{dtype}'."
             )
         except Exception as e:
             logger.warning(
@@ -166,7 +166,7 @@ class RecipeService:
                 with torch.no_grad():
                     generated_ids = self.model.generate(
                         **model_inputs,
-                        max_new_tokens=450,
+                        max_new_tokens=320,
                         temperature=0.7,
                         top_p=0.9,
                         do_sample=True,
