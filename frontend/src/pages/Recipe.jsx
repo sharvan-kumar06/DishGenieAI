@@ -27,6 +27,12 @@ import {
 } from '../services/storage'
 import Toast from '../components/Toast'
 
+// Defense-in-depth sanitization to ensure no stray markdown formatting is displayed
+function cleanText(str) {
+  if (!str) return ''
+  return String(str).replace(/[*_#`~]/g, '').trim()
+}
+
 export default function Recipe() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -394,12 +400,12 @@ export default function Recipe() {
 
               <h2 className="text-2xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white drop-shadow-xs flex items-center gap-2 sm:gap-3 break-words">
                 <span>🍲</span>
-                <span>{recipe.name}</span>
+                <span>{cleanText(recipe.name)}</span>
               </h2>
 
               {recipe.description && recipe.description.trim() && (
                 <p className="mt-3 text-base sm:text-lg text-orange-50 max-w-3xl leading-relaxed">
-                  {recipe.description}
+                  {cleanText(recipe.description)}
                 </p>
               )}
 
@@ -491,7 +497,7 @@ export default function Recipe() {
                             <span className="w-2.5 h-2.5 rounded-full bg-orange-500 shrink-0"></span>
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-bold text-stone-800 break-words">
-                                {item}
+                                {cleanText(item)}
                               </p>
                             </div>
                           </div>
@@ -530,7 +536,7 @@ export default function Recipe() {
                             </span>
                             <div className="flex-1 pt-1">
                               <p className="text-sm sm:text-base text-stone-800 leading-relaxed font-normal">
-                                {step}
+                                {cleanText(step)}
                               </p>
                             </div>
                           </div>
@@ -568,14 +574,14 @@ export default function Recipe() {
                               className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-950 space-y-1.5"
                             >
                               <div className="flex items-center justify-between font-bold text-amber-900">
-                                <span>{sub.ingredient}</span>
+                                <span>{cleanText(sub.ingredient)}</span>
                                 <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800">
                                   Swap
                                 </span>
                               </div>
                               <div className="flex items-center gap-1.5 text-stone-700">
                                 <span className="text-amber-500 font-bold">↓</span>
-                                <span className="font-semibold text-stone-900">{sub.replacement}</span>
+                                <span className="font-semibold text-stone-900">{cleanText(sub.replacement)}</span>
                               </div>
                             </div>
                           ))}
@@ -637,7 +643,7 @@ export default function Recipe() {
                                     isChecked ? 'line-through text-stone-400' : 'text-stone-800'
                                   }`}
                                 >
-                                  {item}
+                                  {cleanText(item)}
                                 </span>
                               </div>
                             )

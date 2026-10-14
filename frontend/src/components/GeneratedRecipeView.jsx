@@ -13,7 +13,15 @@ import {
   RotateCcw,
   BookOpen,
   AlertCircle,
+  Square,
+  CheckSquare,
 } from 'lucide-react'
+
+// Defense-in-depth helper to strip stray markdown from displayed text
+function cleanText(str) {
+  if (!str) return ''
+  return String(str).replace(/[*_#`~]/g, '').trim()
+}
 
 export default function GeneratedRecipeView({
   recipeData,
@@ -22,15 +30,34 @@ export default function GeneratedRecipeView({
   onEditPreferences,
 }) {
   const [copied, setCopied] = useState(false)
+  const [checkedShoppingItems, setCheckedShoppingItems] = useState({})
 
   if (!recipeData) return null
 
   const { recipe, raw_text } = recipeData
 
+  const ingredients = recipe?.ingredients || []
+  const instructions = recipe?.instructions || []
+  const substitutions = recipe?.substitutions || []
+  const shoppingList = recipe?.shopping_list || []
+
+  const toggleShoppingItem = (idx) => {
+    setCheckedShoppingItems((prev) => ({
+      ...prev,
+      [idx]: !prev[idx],
+    }))
+  }
+
   const handleCopyRecipe = () => {
     let text = ''
     if (recipe) {
-      text = `${recipe.name}\n${recipe.description}\n\nINGREDIENTS:\n${recipe.ingredients.map((i) => `- ${i}`).join('\n')}\n\nINSTRUCTIONS:\n${recipe.instructions.map((s, idx) => `${idx + 1}. ${s}`).join('\n')}`
+      text = `${cleanText(recipe.name)}\n${cleanText(recipe.description)}\n\nINGREDIENTS:\n${ingredients.map((i) => `- ${cleanText(i)}`).join('\n')}\n\nINSTRUCTIONS:\n${instructions.map((s, idx) => `${idx + 1}. ${cleanText(s)}`).join('\n')}`
+      if (substitutions.length > 0) {
+        text += `\n\nSUBSTITUTIONS:\n${substitutions.map((s) => `- ${cleanText(s.ingredient)}: ${cleanText(s.replacement)}`).join('\n')}`
+      }
+      if (shoppingList.length > 0) {
+        text += `\n\nSHOPPING LIST:\n${shoppingList.map((item) => `- [ ] ${cleanText(item)}`).join('\n')}`
+      }
     } else {
       text = raw_text || ''
     }
@@ -93,12 +120,14 @@ export default function GeneratedRecipeView({
             </div>
 
             <h2 className="text-3xl sm:text-4xl font-black tracking-tight text-white drop-shadow-xs">
-              {recipe.name}
+              {cleanText(recipe.name)}
             </h2>
 
-            <p className="mt-3 text-sm sm:text-base text-orange-50 max-w-2xl leading-relaxed">
-              {recipe.description}
-            </p>
+            {recipe.description && (
+              <p className="mt-3 text-sm sm:text-base text-orange-50 max-w-2xl leading-relaxed">
+                {cleanText(recipe.description)}
+              </p>
+            )}
 
             {/* Quick Badges */}
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -128,20 +157,23 @@ export default function GeneratedRecipeView({
                 <div className="flex items-center justify-between pb-2 border-b border-stone-200">
                   <h3 className="text-sm font-bold uppercase tracking-wider text-stone-900 flex items-center gap-2">
                     <ChefHat className="w-4 h-4 text-orange-600" />
-                    <span>Ingredients Required ({recipe.ingredients.length})</span>
+                    <span>Ingredients Required ({ingredients.length})</span>
                   </h3>
                 </div>
 
                 <ul className="space-y-2">
-                  {recipe.ingredients.map((item, idx) => (
+                  {ingredients.map((item, idx) => (
                     <li
                       key={idx}
                       className="flex items-center gap-3 p-2.5 rounded-xl bg-stone-50 border border-stone-200/70 text-sm text-stone-800"
                     >
                       <span className="w-2 h-2 rounded-full bg-orange-500 shrink-0"></span>
-                      <span className="font-medium">{item}</span>
+                      <span className="font-medium">{cleanText(item)}</span>
                     </li>
                   ))}
+                  {ingredients.length === 0 && (
+                    <li className="text-sm text-stone-400 italic">No ingredients listed.</li>
+                  )}
                 </ul>
               </div>
 
@@ -149,7 +181,7 @@ export default function GeneratedRecipeView({
               <div className="lg:col-span-6 space-y-6">
                 
                 {/* Substitutions */}
-                {recipe.substitutions && recipe.substitutions.length > 0 && (
+                {substitutions.length > 0 && (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between pb-2 border-b border-stone-200">
                       <h3 className="text-sm font-bold uppercase tracking-wider text-stone-900 flex items-center gap-2">
@@ -159,13 +191,13 @@ export default function GeneratedRecipeView({
                     </div>
 
                     <div className="space-y-2">
-                      {recipe.substitutions.map((sub, idx) => (
+                      {substitutions.map((sub, idx) => (
                         <div
                           key={idx}
                           className="p-3 rounded-xl bg-amber-50/70 border border-amber-200 text-xs text-amber-900 space-y-0.5"
                         >
-                          <span className="font-bold text-amber-800">{sub.ingredient}:</span>{' '}
-                          <span className="text-amber-700">{sub.replacement}</span>
+                          <span className="font-bold text-amber-800">{cleanText(sub.ingredient)}:</span>{' '}
+                          <span className="text-amber-700">{cleanText(sub.replacement)}</span>
                         </div>
                       ))}
                     </div>
@@ -173,7 +205,7 @@ export default function GeneratedRecipeView({
                 )}
 
                 {/* Shopping List */}
-                {recipe.shopping_list && recipe.shopping_list.length > 0 && (
+                {shoppingList.length > 0 && (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between pb-2 border-b border-stone-200">
                       <h3 className="text-sm font-bold uppercase tracking-wider text-stone-900 flex items-center gap-2">
@@ -183,15 +215,35 @@ export default function GeneratedRecipeView({
                     </div>
 
                     <ul className="space-y-1.5">
-                      {recipe.shopping_list.map((item, idx) => (
-                        <li
-                          key={idx}
-                          className="flex items-center gap-2.5 text-xs text-stone-600 p-2 rounded-lg bg-stone-50 border border-stone-200/60"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                          <span>{item}</span>
-                        </li>
-                      ))}
+                      {shoppingList.map((item, idx) => {
+                        const isChecked = !!checkedShoppingItems[idx]
+                        return (
+                          <li
+                            key={idx}
+                            onClick={() => toggleShoppingItem(idx)}
+                            className={`flex items-center gap-2.5 text-xs p-2 rounded-lg border transition-all cursor-pointer ${
+                              isChecked
+                                ? 'bg-emerald-50/50 border-emerald-200 text-stone-400'
+                                : 'bg-stone-50 border-stone-200/60 text-stone-700 hover:border-emerald-300'
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              className="text-emerald-600 shrink-0"
+                              aria-label={isChecked ? 'Uncheck item' : 'Check item'}
+                            >
+                              {isChecked ? (
+                                <CheckSquare className="w-4 h-4 text-emerald-600" />
+                              ) : (
+                                <Square className="w-4 h-4 text-stone-400" />
+                              )}
+                            </button>
+                            <span className={isChecked ? 'line-through text-stone-400' : 'text-stone-800 font-medium'}>
+                              {cleanText(item)}
+                            </span>
+                          </li>
+                        )
+                      })}
                     </ul>
                   </div>
                 )}
@@ -209,7 +261,7 @@ export default function GeneratedRecipeView({
               </div>
 
               <div className="space-y-3.5">
-                {recipe.instructions.map((step, idx) => (
+                {instructions.map((step, idx) => (
                   <div
                     key={idx}
                     className="flex items-start gap-4 p-4 rounded-2xl bg-stone-50 border border-stone-200/80 shadow-xs"
@@ -218,10 +270,13 @@ export default function GeneratedRecipeView({
                       {idx + 1}
                     </span>
                     <p className="text-sm text-stone-700 leading-relaxed font-normal">
-                      {step}
+                      {cleanText(step)}
                     </p>
                   </div>
                 ))}
+                {instructions.length === 0 && (
+                  <p className="text-sm text-stone-400 italic">No instructions available.</p>
+                )}
               </div>
             </div>
 

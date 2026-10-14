@@ -11,7 +11,7 @@ from app.services.recipe_retriever import RecipeRetriever, get_recipe_retriever
 
 logger = logging.getLogger(__name__)
 
-# Pretrained Qwen2.5-1.5B-Instruct model ID (optimized for fast CPU/local memory footprint)
+# Pretrained Qwen2.5-1.5B-Instruct model ID (optimized for lightweight local laptop CPU/memory)
 DEFAULT_GENAI_MODEL = os.getenv("GENAI_MODEL", "Qwen/Qwen2.5-1.5B-Instruct")
 
 
@@ -90,8 +90,8 @@ class RecipeService:
         candidates: List[Dict[str, Any]],
     ) -> List[Dict[str, str]]:
         """
-        Constructs chat messages for Qwen2.5-3B-Instruct.
-        Injects ONLY a small, relevant set of candidate recipes (top 2-3) into the prompt.
+        Constructs chat messages for Qwen2.5-1.5B-Instruct.
+        Instructs the model to return strict, valid JSON with all six required recipe sections.
         """
         ing_list = ", ".join(ingredients)
         extras = preferences.additionalIngredients.strip() if preferences.additionalIngredients else "None"
@@ -101,22 +101,42 @@ class RecipeService:
         for i, cand in enumerate(candidates[:2], 1):
             raw_ings = cand.get("ingredients_raw", "")
             steps = cand.get("instructions", "")
-            # Truncate steps to keep prompt compact and fast
             steps_preview = ". ".join([s.strip() for s in steps.split("\n") if len(s.strip()) > 5][:3])
             ref_text += f"\nReference Recipe {i}: {cand.get('name')}\n"
             ref_text += f"- Ingredients: {raw_ings[:180]}\n"
             ref_text += f"- Key Steps: {steps_preview[:250]}\n"
 
         system_prompt = (
-            "You are DishGenie, a master culinary AI chef. Your task is to generate an authentic, "
-            "delicious, and practical recipe tailored to the user's pantry ingredients and culinary constraints. "
-            "Use the provided reference recipes for cooking technique and spice balance inspiration. "
-            "Output the recipe with structured sections: "
-            "RECIPE NAME, DESCRIPTION, INGREDIENTS, INSTRUCTIONS, SUBSTITUTIONS, SHOPPING LIST."
+            "You are DishGenie, an expert culinary AI chef. Your task is to generate an authentic, "
+            "delicious, and practical recipe tailored to the user's pantry ingredients and culinary constraints.\n"
+            "You MUST output your response as a single, valid JSON object with NO markdown code fences (no ```json), "
+            "no conversational text, and no commentary before or after.\n\n"
+            "The JSON object must have EXACTLY this structure:\n"
+            "{\n"
+            '  "name": "Recipe Name",\n'
+            '  "description": "Appetizing overview of the dish",\n'
+            '  "ingredients": ["1 cup ingredient name, prepped", "1 tsp spice", ...],\n'
+            '  "instructions": ["Step 1 actionable sentence.", "Step 2 actionable sentence.", ...],\n'
+            '  "substitutions": [\n'
+            '    {"ingredient": "Item name", "replacement": "Culinary alternative with flavor/texture reason"}\n'
+            "  ],\n"
+            '  "shopping_list": ["Item needing purchase", ...]\n'
+            "}\n\n"
+            "CRITICAL CULINARY RULES:\n"
+            "1. INGREDIENT CONSISTENCY: Every single ingredient, aromatic (garlic, ginger, onions), spice "
+            "(fennel seeds, cumin, turmeric, chilli), oil, and garnish mentioned in your cooking instructions "
+            "MUST be listed in the 'ingredients' array with sensible quantities.\n"
+            "2. ACTIONABLE INSTRUCTIONS: Every step in 'instructions' must be a complete, actionable cooking instruction "
+            "with realistic cooking times and temperatures. NEVER use headings or section labels (e.g. 'For the Curry:', "
+            "'Prepare Papaya:', 'Add Spices:') as instruction steps.\n"
+            f"3. DIETARY COMPLIANCE: The recipe MUST strictly comply with the user's dietary restriction: {preferences.diet}.\n"
+            f"4. CUISINE AUTHENTICITY: Maintain culinary techniques authentic to {preferences.cuisine} cuisine.\n"
+            "5. SUBSTITUTIONS: Provide ingredient-specific culinary replacements. Never suggest generic filler or allergens.\n"
+            "6. SHOPPING LIST: Derive the shopping list strictly from ingredients not already present in the user's confirmed pantry."
         )
 
         user_prompt = (
-            f"Please generate a complete recipe using these detected ingredients: {ing_list}\n"
+            f"Create a complete recipe using these detected ingredients: {ing_list}\n"
             f"User Preferences:\n"
             f"- Diet: {preferences.diet}\n"
             f"- Cuisine: {preferences.cuisine}\n"
@@ -125,7 +145,7 @@ class RecipeService:
             f"- Servings: {preferences.servings}\n"
             f"- Additional Pantry Ingredients: {extras}\n\n"
             f"Retrieved Database Reference Recipes (Inspiration):{ref_text}\n\n"
-            "Generate the full step-by-step recipe now:"
+            "Return ONLY the valid JSON object now:"
         )
 
         return [
@@ -135,10 +155,11 @@ class RecipeService:
 
     def generate(self, request: RecipeRequest) -> RecipeResponse:
         """
-        Generates a recipe using local database retrieval and Qwen2.5-3B-Instruct inference.
+        Generates a recipe using local database retrieval and Qwen2.5-1.5B-Instruct inference.
         Parses output into the structured Recipe schema, maintaining the /api/recipe/generate contract.
         """
         if not self.is_available:
+            logger.error("[RecipeService] Neither language model nor recipe database is available.")
             raise RuntimeError("RecipeService is not initialized or database is unavailable.")
 
         # 1. Retrieve small relevant candidate set from SQLite
@@ -163,10 +184,13 @@ class RecipeService:
                 )
                 model_inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
 
+                max_tokens = int(os.getenv("GENAI_MAX_NEW_TOKENS", "850"))
+                logger.info(f"[RecipeService] Starting Qwen generation (max_new_tokens={max_tokens})...")
+
                 with torch.no_grad():
                     generated_ids = self.model.generate(
                         **model_inputs,
-                        max_new_tokens=320,
+                        max_new_tokens=max_tokens,
                         temperature=0.7,
                         top_p=0.9,
                         do_sample=True,
@@ -192,10 +216,15 @@ class RecipeService:
                     candidate_recipe=top_cand,
                 )
 
-                if recipe:
+                if recipe and recipe.ingredients and recipe.instructions:
+                    logger.info(
+                        f"[RecipeService] Successfully parsed recipe '{recipe.name}' with "
+                        f"{len(recipe.ingredients)} ingredients, {len(recipe.instructions)} steps, "
+                        f"{len(recipe.substitutions)} substitutions, {len(recipe.shopping_list)} shopping items."
+                    )
                     return RecipeResponse(success=True, recipe=recipe, raw_text=raw_text)
                 else:
-                    return RecipeResponse(success=True, recipe=None, raw_text=raw_text)
+                    logger.warning("[RecipeService] Model output could not be parsed into a complete recipe. Activating database fallback.")
 
             except Exception as gen_err:
                 logger.error(f"[RecipeService] Qwen generation error: {gen_err}", exc_info=True)
@@ -221,6 +250,7 @@ class RecipeService:
             )
             return RecipeResponse(success=True, recipe=recipe, raw_text=raw_text)
 
+        logger.error("[RecipeService] Neither model generation succeeded nor any candidate recipe was found.")
         raise RuntimeError("No candidate recipes or language model available to generate recipe.")
 
 
