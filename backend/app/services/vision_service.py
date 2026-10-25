@@ -10,10 +10,10 @@ from PIL import Image, UnidentifiedImageError
 
 try:
     from app.services.freshness_estimator import FreshnessAndExpiryEstimator, get_freshness_estimator
-    from app.services.item_segmenter import ItemSegmenter, get_item_segmenter
+    from app.services.item_segmenter import ItemSegmenter, calculate_iou, get_item_segmenter
 except ImportError:
     from backend.app.services.freshness_estimator import FreshnessAndExpiryEstimator, get_freshness_estimator
-    from backend.app.services.item_segmenter import ItemSegmenter, get_item_segmenter
+    from backend.app.services.item_segmenter import ItemSegmenter, calculate_iou, get_item_segmenter
 
 logger = logging.getLogger(__name__)
 
@@ -143,11 +143,19 @@ class VisionService:
         else:
             rgb_img = pil_img.convert("RGB")
 
-        # Resize to 224 x 224
-        resized_img = rgb_img.resize((224, 224), Image.Resampling.BILINEAR)
+        # Aspect-ratio-preserving resize with neutral centered padding
+        orig_w, orig_h = rgb_img.size
+        scale = 224.0 / max(orig_w, orig_h)
+        new_w = max(1, int(round(orig_w * scale)))
+        new_h = max(1, int(round(orig_h * scale)))
+        scaled_img = rgb_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+
+        # 224 x 224 canvas with neutral gray padding
+        canvas = Image.new("RGB", (224, 224), (128, 128, 128))
+        canvas.paste(scaled_img, ((224 - new_w) // 2, (224 - new_h) // 2))
 
         # Convert to NumPy array
-        img_array = np.array(resized_img, dtype=np.float32)
+        img_array = np.array(canvas, dtype=np.float32)
 
         # Add batch dimension -> (1, 224, 224, 3)
         batched_array = np.expand_dims(img_array, axis=0)
@@ -240,98 +248,185 @@ class VisionService:
         image_rgb = np.array(rgb_img)
         img_h, img_w = image_rgb.shape[:2]
 
-        # 2. Segment items using OpenCV contour discovery
-        candidate_boxes = self.segmenter.segment(image_rgb)
+        # 1. Global Full-Image CNN Inference First (Anchor Predictions)
+        full_batched = self.preprocess_image(pil_img)
+        primary_full, full_top_candidates = self._infer_array(full_batched, top_k=max(5, top_k))
+        anchor_class = primary_full["name"]
+        anchor_confidence = float(primary_full["confidence"])
+
+        full_top_names = [c["name"] for c in full_top_candidates]
+        full_top3_names = set(full_top_names[:3])
+        full_top5_names = set(full_top_names[:5])
+
+        # 2. Segment items using OpenCV contour discovery & pile assessment
+        candidate_boxes, pile_info = self.segmenter.segment_with_pile_info(image_rgb)
+        is_pile = pile_info.get("is_pile", False)
+        peak_count = pile_info.get("peak_count", len(candidate_boxes))
 
         detections: List[Dict[str, Any]] = []
-        is_multi_item = len(candidate_boxes) > 1
+        is_multi_item = len(candidate_boxes) > 1 or (
+            len(candidate_boxes) == 1 and candidate_boxes[0] != (0, 0, img_w, img_h)
+        )
 
-        # 3. If multiple boxes detected, classify each crop
-        if is_multi_item:
-            logger.info(f"[VisionService] Processing {len(candidate_boxes)} candidate crops sequentially...")
+        # 3. Classify candidate boxes with Square Context Padding & Global-Local Consistency Gate
+        if is_multi_item and candidate_boxes != [(0, 0, img_w, img_h)]:
+            logger.info(
+                f"[VisionService] Processing {len(candidate_boxes)} candidate crops "
+                f"(is_pile={is_pile}, peaks={peak_count}, anchor={anchor_class})..."
+            )
             for box in candidate_boxes:
                 bx, by, bw, bh = box
-                crop = self.segmenter.get_padded_crop(image_rgb, box, pad_ratio=0.08)
+                # Extract square context crop (25% margin on all sides)
+                crop = self.segmenter.get_square_context_crop(image_rgb, box, margin_ratio=0.25)
                 if crop.shape[0] < 20 or crop.shape[1] < 20:
                     continue
 
                 crop_batched = self.preprocess_image(crop)
-                primary, _ = self._infer_array(crop_batched, top_k=1)
+                crop_prim, _ = self._infer_array(crop_batched, top_k=1)
 
-                # Filter low-confidence background crops
-                if primary["confidence"] >= min_confidence:
-                    freshness = self.freshness_estimator.analyze_crop(crop, primary["name"])
-                    detections.append({
-                        "ingredient": primary["name"],
-                        "confidence": primary["confidence"],
-                        "box": {"x": int(bx), "y": int(by), "w": int(bw), "h": int(bh)},
-                        "freshness_score": freshness["freshness_score"],
-                        "expiry_days": freshness["estimated_expiry_days"],
-                        "status": freshness["status"],
-                    })
+                # Check spatial separation for this box
+                # A box is spatially separated if its IoU with every other candidate box is < 0.15
+                is_spatially_separated = True
+                for other_box in candidate_boxes:
+                    if other_box != box and calculate_iou(box, other_box) >= 0.15:
+                        is_spatially_separated = False
+                        break
+
+                # Global-Local Consistency Gate:
+                # Rule 1: When multiple crops are spatially separated (IoU < 0.15),
+                # NEVER overwrite a crop's class with Full-Image Top-1 if crop's own CNN confidence is >= 55%
+                if is_spatially_separated and crop_prim["confidence"] >= 0.55:
+                    assigned_name = crop_prim["name"]
+                    assigned_conf = crop_prim["confidence"]
+                elif is_pile:
+                    # In Dense Homogeneous Pile Mode (Potato, Papaya, Carrot, Bitter Gourd):
+                    # Use the Full-Image Top-1 CNN prediction as the class for the pile
+                    assigned_name = anchor_class
+                    assigned_conf = anchor_confidence
                 else:
-                    logger.debug(
-                        f"[VisionService] Crop at ({bx}, {by}, {bw}, {bh}) dropped: confidence {primary['confidence']} < {min_confidence}"
-                    )
+                    if crop_prim["name"] in full_top3_names:
+                        assigned_name = crop_prim["name"]
+                        assigned_conf = crop_prim["confidence"]
+                    elif crop_prim["name"] in full_top5_names and crop_prim["confidence"] >= 0.55:
+                        assigned_name = crop_prim["name"]
+                        assigned_conf = crop_prim["confidence"]
+                    elif crop_prim["confidence"] >= 0.55:
+                        assigned_name = crop_prim["name"]
+                        assigned_conf = crop_prim["confidence"]
+                    else:
+                        # Hallucinated texture -> assign anchor class
+                        assigned_name = anchor_class
+                        assigned_conf = anchor_confidence
 
-        # 4. Fallback to Full-Image Inference if single item or if all crops were low confidence
+                freshness = self.freshness_estimator.analyze_crop(crop, assigned_name)
+                exp_days = freshness["estimated_expiry_days"]
+                det_status = "Use First" if exp_days <= 3 else ("Medium" if exp_days <= 7 else "Fresh")
+                detections.append({
+                    "ingredient": assigned_name,
+                    "confidence": assigned_conf,
+                    "box": {"x": int(bx), "y": int(by), "w": int(bw), "h": int(bh)},
+                    "freshness_score": freshness["freshness_score"],
+                    "expiry_days": exp_days,
+                    "status": det_status,
+                })
+
+        # 4. Fallback if no valid sub-crops or if single item
         if not detections:
-            logger.info("[VisionService] Executing full-image inference fallback...")
-            full_batched = self.preprocess_image(pil_img)
-            primary_full, top_predictions = self._infer_array(full_batched, top_k=top_k)
-            freshness = self.freshness_estimator.analyze_crop(image_rgb, primary_full["name"])
-
+            logger.info(f"[VisionService] Single item or pile region; using full-image detection for '{anchor_class}'.")
+            freshness = self.freshness_estimator.analyze_crop(image_rgb, anchor_class)
+            exp_days = freshness["estimated_expiry_days"]
+            det_status = "Use First" if exp_days <= 3 else ("Medium" if exp_days <= 7 else "Fresh")
             detections.append({
-                "ingredient": primary_full["name"],
-                "confidence": primary_full["confidence"],
+                "ingredient": anchor_class,
+                "confidence": anchor_confidence,
                 "box": {"x": 0, "y": 0, "w": int(img_w), "h": int(img_h)},
                 "freshness_score": freshness["freshness_score"],
-                "expiry_days": freshness["estimated_expiry_days"],
-                "status": freshness["status"],
+                "expiry_days": exp_days,
+                "status": det_status,
             })
-        else:
-            # Build top_predictions from detections for backward compatibility
-            sorted_detections = sorted(detections, key=lambda x: x["confidence"], reverse=True)
-            top_predictions = [
-                {"name": d["ingredient"], "confidence": d["confidence"]}
-                for d in sorted_detections[:top_k]
-            ]
 
-        # 5. Aggregate item counts and inventory
-        ingredient_map: Dict[str, Dict[str, Any]] = {}
+        # 5. Model Ranked Candidates: Deduplicated Full-Image Top-3 + High-Confidence Isolated Crop Predictions
+        seen_classes = set()
+        ranked_candidates = []
+
+        # Anchor first
+        seen_classes.add(anchor_class)
+        ranked_candidates.append({
+            "name": anchor_class,
+            "confidence": anchor_confidence,
+        })
+
+        # High-confidence isolated crop predictions (e.g. Tomato when Potato is full-image anchor)
         for det in detections:
-            ing = det["ingredient"]
-            if ing not in ingredient_map:
-                ingredient_map[ing] = {
-                    "ingredient": ing,
-                    "count": 0,
-                    "min_expiry_days": det["expiry_days"],
-                    "status": det["status"],
-                }
-            ingredient_map[ing]["count"] += 1
-            if det["expiry_days"] < ingredient_map[ing]["min_expiry_days"]:
-                ingredient_map[ing]["min_expiry_days"] = det["expiry_days"]
+            dname = det["ingredient"]
+            if dname not in seen_classes and det["confidence"] >= 0.55:
+                seen_classes.add(dname)
+                ranked_candidates.append({
+                    "name": dname,
+                    "confidence": float(det["confidence"]),
+                })
 
-        # Recalculate status for aggregated inventory items
-        for ing, info in ingredient_map.items():
-            if info["min_expiry_days"] <= 3:
-                info["status"] = "Use First"
-            elif info["min_expiry_days"] <= 7:
-                info["status"] = "Medium"
-            else:
-                info["status"] = "Fresh"
+        # Full-image top candidates (deduplicated)
+        for cand in full_top_candidates:
+            cname = cand["name"]
+            if cname not in seen_classes:
+                seen_classes.add(cname)
+                ranked_candidates.append({
+                    "name": cname,
+                    "confidence": float(cand["confidence"]),
+                })
+
+        top_predictions = ranked_candidates[:top_k]
+        primary_prediction = {
+            "name": anchor_class,
+            "confidence": anchor_confidence,
+        }
+
+        # 6. Aggregate Produce Inventory & Freshness Tracking
+        ingredient_map: Dict[str, Dict[str, Any]] = {}
+        distinct_classes = {d["ingredient"] for d in detections}
+
+        # Pile aggregation ONLY applies when ALL detections belong to the SAME class
+        # (e.g. dense bag of carrots with 6-8 carrots), NEVER when different items are present!
+        if is_pile and len(distinct_classes) == 1:
+            pile_count = min(12, max(len(detections), peak_count))
+            min_exp = min(d["expiry_days"] for d in detections)
+            status = "Use First" if min_exp <= 3 else ("Medium" if min_exp <= 7 else "Fresh")
+            ingredient_map[anchor_class] = {
+                "ingredient": anchor_class,
+                "count": pile_count,
+                "min_expiry_days": min_exp,
+                "status": status,
+            }
+        else:
+            # Multiple items or distinct separated classes (e.g. Tomato + Potato):
+            for det in detections:
+                ing = det["ingredient"]
+                if ing not in ingredient_map:
+                    ingredient_map[ing] = {
+                        "ingredient": ing,
+                        "count": 0,
+                        "min_expiry_days": det["expiry_days"],
+                        "status": det["status"],
+                    }
+                ingredient_map[ing]["count"] += 1
+                if det["expiry_days"] < ingredient_map[ing]["min_expiry_days"]:
+                    ingredient_map[ing]["min_expiry_days"] = det["expiry_days"]
+
+            for ing, info in ingredient_map.items():
+                if info["min_expiry_days"] <= 3:
+                    info["status"] = "Use First"
+                elif info["min_expiry_days"] <= 7:
+                    info["status"] = "Medium"
+                else:
+                    info["status"] = "Fresh"
 
         inventory = list(ingredient_map.values())
         total_items_detected = sum(item["count"] for item in inventory)
 
-        # 6. Generate annotated visualization image
+        # 7. Generate annotated visualization image
         annotated_rgb = self.segmenter.annotate_image(image_rgb, detections)
         annotated_b64 = self.segmenter.encode_base64_jpeg(annotated_rgb)
-
-        primary_prediction = top_predictions[0] if top_predictions else {
-            "name": detections[0]["ingredient"],
-            "confidence": detections[0]["confidence"],
-        }
 
         logger.info(
             f"[VisionService] Completed multi-item detection: {len(detections)} instances, "

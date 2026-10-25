@@ -68,6 +68,7 @@ EXPLICIT_SHELF_LIFE: Dict[str, int] = {
     "leaf_lettuce": 5,
     "asparagus_lettuce": 6,
     "coriander": 5,
+    "cilantro": 5,
     "basil": 5,
     "mint": 5,
     "parsley": 6,
@@ -259,105 +260,180 @@ class FreshnessAndExpiryEstimator:
 
     def analyze_crop(
         self,
-        crop_rgb: np.ndarray,
+        crop: np.ndarray,
         ingredient_name: str,
+        is_bgr: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
-        Analyzes a single cropped ingredient image to grade freshness and estimate expiry days.
-        crop_rgb: shape (H, W, 3) in uint8 RGB format.
+        Analyzes a single produce crop to estimate decay ratio, freshness score, and expiry.
+        Supports both RGB (standard from PIL/vision pipeline) and BGR (from cv2.imread).
+
+        Deterministic Freshness Pipeline:
+          1. Detects RGB vs BGR channel order and applies appropriate color conversions.
+          2. Extracts central 50% elliptical produce surface mask.
+          3. Filters specular highlights (V > 240, S < 30), deep shadows (V < 25),
+             and green stem/calyx pixels (Hue 35-85) on non-green produce.
+          4. Computes Relative Surface Uniformity in LAB space (median color deviation delta_E).
+          5. Computes Texture Smoothness via Sobel gradients.
+          6. Boosts vibrancy score to [0.85, 0.95] for high-saturation fresh produce (S > 120, V > 110, low rot).
+          7. Returns deterministic freshness_score strictly in [0.35, 0.98].
+          8. Enforces status == 'Use First' ONLY when estimated_expiry_days <= 3.
         """
-        if crop_rgb is None or crop_rgb.size == 0 or len(crop_rgb.shape) != 3:
+        base_days = self.get_base_shelf_life(ingredient_name)
+
+        if crop is None or crop.size == 0 or len(crop.shape) != 3:
             return {
                 "freshness_score": 0.85,
                 "decay_ratio": 0.05,
-                "estimated_expiry_days": max(1, round(self.get_base_shelf_life(ingredient_name) * 0.85)),
+                "estimated_expiry_days": max(1, round(base_days * 0.85)),
                 "status": "Fresh",
+                "base_days": base_days,
             }
 
-        h, w, _ = crop_rgb.shape
-        total_pixels = h * w
-        if total_pixels == 0:
+        h, w, _ = crop.shape
+        if h < 4 or w < 4:
             return {
                 "freshness_score": 0.85,
-                "decay_ratio": 0.0,
-                "estimated_expiry_days": max(1, round(self.get_base_shelf_life(ingredient_name) * 0.85)),
+                "decay_ratio": 0.05,
+                "estimated_expiry_days": max(1, round(base_days * 0.85)),
                 "status": "Fresh",
+                "base_days": base_days,
             }
 
-        # 1. Convert to HSV
-        hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+        norm_name = ingredient_name.strip().lower().replace(" ", "_")
+
+        # 1. Detect RGB vs BGR Channel Order if not explicitly passed
+        if is_bgr is None:
+            red_orange_produce = {
+                "tomato", "carrot", "orange", "apple", "papaya",
+                "strawberry", "pomegranate", "plum", "cherry"
+            }
+            if any(p in norm_name for p in red_orange_produce):
+                mean_ch0 = float(np.mean(crop[:, :, 0]))
+                mean_ch2 = float(np.mean(crop[:, :, 2]))
+                # In RGB, Red is ch0. If ch2 is significantly higher than ch0, input is BGR
+                is_bgr = bool(mean_ch2 > mean_ch0 + 25.0)
+            else:
+                is_bgr = False
+
+        if is_bgr:
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB).astype(np.float32)
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        else:
+            crop_rgb = crop
+            hsv = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2HSV)
+            lab = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+            gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
+
+        # 2. Extract Central 50% Elliptical Mask (pure produce surface)
+        center_mask = np.zeros((h, w), dtype=np.uint8)
+        cx, cy = w // 2, h // 2
+        ax = max(2, int(w * 0.38))
+        ay = max(2, int(h * 0.38))
+        cv2.ellipse(center_mask, (cx, cy), (ax, ay), 0, 0, 360, 255, -1)
+
+        # 3. Filter Specular Highlights, Deep Shadows, and Green Stem/Calyx in HSV
+        h_channel = hsv[:, :, 0]
         s_channel = hsv[:, :, 1]
         v_channel = hsv[:, :, 2]
 
-        # 2. Convert to Grayscale for texture variance
-        gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
-        lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        specular_mask = (v_channel > 240) & (s_channel < 30)
+        deep_shadow_mask = (v_channel < 25)
+        invalid_mask = specular_mask | deep_shadow_mask
 
-        # 3. Detect dark, brown, or rotting spot pixels
-        # Dark necrotic spots: very low brightness (v < 38)
-        dark_decay = (v_channel < 38)
+        # Exclude green stem/calyx pixels for non-green produce
+        non_green_produce = {
+            "tomato", "capsicum", "apple", "carrot", "orange", "papaya", "strawberry",
+            "peach", "plum", "cherry", "mango", "pomegranate", "lemon", "banana", "potato",
+            "sweet_potato", "onion", "shallot", "garlic", "ginger", "beetroot", "radish", "turnip"
+        }
+        if any(p in norm_name for p in non_green_produce):
+            green_stem_mask = (h_channel >= 35) & (h_channel <= 85) & (s_channel > 40)
+            invalid_mask = invalid_mask | green_stem_mask
 
-        # Browning discoloration: hue in brown range [10, 28], moderate saturation [35, 160], low value [30, 85]
-        h_channel = hsv[:, :, 0]
-        brown_decay = (h_channel >= 8) & (h_channel <= 28) & (s_channel >= 30) & (s_channel <= 165) & (v_channel >= 30) & (v_channel <= 85)
+        valid_surface_mask = (center_mask == 255) & (~invalid_mask)
+        if np.count_nonzero(valid_surface_mask) < 20:
+            valid_surface_mask = (center_mask == 255)
 
-        # Combine decay masks
-        decay_mask = dark_decay | brown_decay
+        total_valid = int(np.count_nonzero(valid_surface_mask))
 
-        # Avoid counting dark shadow edges as decay: ignore perimeter 4% boundary
-        margin_y = max(1, int(h * 0.04))
-        margin_x = max(1, int(w * 0.04))
-        inner_decay_mask = decay_mask[margin_y:h - margin_y, margin_x:w - margin_x]
-        inner_total = inner_decay_mask.size if inner_decay_mask.size > 0 else total_pixels
+        # 4. Relative Surface Uniformity in LAB Space
+        surface_lab = lab[valid_surface_mask]
+        med_l = float(np.median(surface_lab[:, 0]))
+        med_a = float(np.median(surface_lab[:, 1]))
+        med_b = float(np.median(surface_lab[:, 2]))
 
-        decay_ratio = float(np.count_nonzero(inner_decay_mask) / inner_total)
+        diff_l = surface_lab[:, 0] - med_l
+        diff_a = surface_lab[:, 1] - med_a
+        diff_b = surface_lab[:, 2] - med_b
+        delta_e = np.sqrt(diff_l ** 2 + diff_a ** 2 + diff_b ** 2)
 
-        # 4. Color vibrancy & saturation analysis
-        mean_sat = float(np.mean(s_channel))
-        mean_val = float(np.mean(v_channel))
+        dark_anomaly = (diff_l < -15.0)
+        chromatic_decay = (diff_l < -8.0) & (delta_e > 18.0)
+        extreme_stain = (delta_e > 26.0)
 
-        # 5. Calculate freshness score
-        # Fresh baseline is 1.0
-        score = 1.0
+        blemish_pixels = np.count_nonzero(dark_anomaly | chromatic_decay | extreme_stain)
+        blemish_ratio = float(blemish_pixels / max(1, total_valid))
+        blemish_score = 1.0 - min(0.60, blemish_ratio * 2.2)
 
-        # Penalty for decay / browning spots
-        score -= min(0.65, decay_ratio * 1.8)
+        # 5. Texture Smoothness Score via Sobel Gradients
+        sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        grad_mag = np.sqrt(sobel_x ** 2 + sobel_y ** 2)
 
-        # Penalty for dull / faded colors (desaturation)
-        if mean_sat < 35.0:
-            score -= 0.12
-        elif mean_sat > 70.0:
-            score += 0.04
+        surface_grads = grad_mag[valid_surface_mask]
+        mean_grad = float(np.mean(surface_grads)) if len(surface_grads) > 0 else 10.0
+        std_grad = float(np.std(surface_grads)) if len(surface_grads) > 0 else 5.0
+        texture_roughness = mean_grad * 0.5 + std_grad * 0.5
+        texture_score = 1.0 - min(0.45, max(0.0, (texture_roughness - 10.0) / 45.0))
 
-        # Penalty for extreme dark shriveling or dullness
-        if mean_val < 50.0:
-            score -= 0.10
-        elif mean_val > 190.0 and mean_sat < 40.0:
-            # Overly pale/bleached
-            score -= 0.06
+        # Combine: 70% Blemish Uniformity + 30% Texture Smoothness
+        combined_score = 0.70 * blemish_score + 0.30 * texture_score
 
-        # Texture variance penalty: abnormally high texture variance often signals wrinkling/pitting
-        if lap_var > 650.0 and decay_ratio > 0.08:
-            score -= 0.08
+        # 6. Vibrancy Boost for High-Saturation Bright Fresh Produce
+        # (Tomato, Capsicum, Carrot, Orange where S > 120 and V > 110 with minimal dark rot V < 35)
+        rot_pixels = np.count_nonzero((v_channel < 35) & valid_surface_mask)
+        rot_ratio = float(rot_pixels / max(1, total_valid))
 
-        # Clamp freshness score strictly between 0.20 (stale/overripe) and 1.00 (fresh)
-        freshness_score = float(np.clip(round(score, 2), 0.20, 1.00))
+        surface_s = s_channel[valid_surface_mask]
+        surface_v = v_channel[valid_surface_mask]
+        median_s = float(np.median(surface_s)) if len(surface_s) > 0 else 0.0
+        median_v = float(np.median(surface_v)) if len(surface_v) > 0 else 0.0
 
-        # 6. Calculate estimated expiry days
-        base_days = self.get_base_shelf_life(ingredient_name)
+        bright_produce = {
+            "tomato", "capsicum", "carrot", "orange", "apple", "papaya",
+            "strawberry", "peach", "mango", "pomegranate", "lemon", "banana"
+        }
+        is_bright = any(p in norm_name for p in bright_produce)
+
+        if is_bright and median_s > 120.0 and median_v > 110.0 and rot_ratio < 0.08:
+            # High-saturation vibrant fresh produce: guarantee freshness_score between 0.85 and 0.95
+            combined_score = max(combined_score, 0.88)
+            combined_score = min(0.95, combined_score + 0.04)
+        elif blemish_ratio < 0.15 and median_s > 110.0 and median_v > 100.0:
+            combined_score = max(combined_score, 0.85)
+            combined_score = min(0.95, combined_score + 0.03)
+
+        freshness_score = float(np.clip(round(combined_score, 2), 0.35, 0.98))
         estimated_expiry_days = max(1, int(round(base_days * freshness_score)))
 
-        # 7. Assign category status
+        # 7. Category Status Assignment
+        # [USE FIRST] is ONLY assigned when estimated_expiry_days <= 3
         if estimated_expiry_days <= 3:
             status = "Use First"
         elif estimated_expiry_days <= 7:
-            status = "Medium"
+            if freshness_score >= 0.80 and estimated_expiry_days >= max(4, int(base_days * 0.70)):
+                status = "Fresh"
+            else:
+                status = "Medium"
         else:
             status = "Fresh"
 
         return {
             "freshness_score": freshness_score,
-            "decay_ratio": round(decay_ratio, 4),
+            "decay_ratio": round(blemish_ratio, 4),
             "estimated_expiry_days": estimated_expiry_days,
             "status": status,
             "base_days": base_days,
