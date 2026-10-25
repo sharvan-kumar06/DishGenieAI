@@ -21,7 +21,7 @@ export default function Hero() {
             {/* Pill Badge */}
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-orange-100/80 border border-orange-200 text-orange-800 text-xs font-semibold shadow-xs">
               <Sparkles className="w-3.5 h-3.5 text-orange-600" />
-              <span>Smart Recipe Assistant • PBL Project</span>
+              <span>Smart Recipe Assistant • AI Kitchen SaaS</span>
             </div>
 
             {/* Main Heading */}

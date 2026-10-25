@@ -492,3 +492,37 @@ export async function generateRecipe(payload) {
   }
 }
 
+/**
+ * Fetches top candidate dish style options from the database based on confirmed ingredients and preferences.
+ *
+ * @param {{ ingredients: string[], preferences: Object, inventory?: Array }} payload
+ * @returns {Promise<{ success: boolean, options: Array }>}
+ */
+export async function fetchRecipeCandidates(payload) {
+  if (!payload || !payload.ingredients || payload.ingredients.length === 0) {
+    return { success: false, options: [] }
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/recipe/candidates`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+
+    if (!response.ok) {
+      return { success: false, options: [] }
+    }
+
+    const data = await response.json()
+    return data
+  } catch (err) {
+    console.warn('Could not fetch candidate dish options:', err)
+    return { success: false, options: [] }
+  }
+}
+
+

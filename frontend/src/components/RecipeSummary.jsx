@@ -132,7 +132,7 @@ export default function RecipeSummary({
       {/* Action Footer */}
       <div className="pt-4 border-t border-stone-100 flex flex-col sm:flex-row items-center justify-between gap-4">
         <p className="text-xs text-stone-500 text-center sm:text-left">
-          Ready to synthesize? Click below to send your parameters to the local AI service.
+          Ready to cook? Click below to explore authentic dish options and synthesize your recipe.
         </p>
 
         <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center gap-3">
@@ -160,7 +160,7 @@ export default function RecipeSummary({
             ) : (
               <>
                 <Sparkles className="w-4 h-4" aria-hidden="true" />
-                <span>Generate My Recipe</span>
+                <span>Choose Dish Style & Generate</span>
               </>
             )}
           </button>

@@ -3,8 +3,6 @@ import Navbar from './components/Navbar'
 import Home from './pages/Home'
 import Detect from './pages/Detect'
 import Recipe from './pages/Recipe'
-import HowItWorksPage from './pages/HowItWorksPage'
-import AboutPage from './pages/AboutPage'
 import HistoryPage from './pages/HistoryPage'
 import FavoritesPage from './pages/FavoritesPage'
 import NotFound from './pages/NotFound'
@@ -21,8 +19,6 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/detect" element={<Detect />} />
           <Route path="/recipe" element={<Recipe />} />
-          <Route path="/how-it-works" element={<HowItWorksPage />} />
-          <Route path="/about" element={<AboutPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/favorites" element={<FavoritesPage />} />
           <Route path="*" element={<NotFound />} />

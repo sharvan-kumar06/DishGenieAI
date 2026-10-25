@@ -18,8 +18,8 @@ export default function HowItWorks() {
     },
     {
       number: '03',
-      title: 'Customize',
-      description: 'Choose your diet, cuisine, cooking time and preferences.',
+      title: 'Choose Dish Style',
+      description: 'Select your preferred candidate recipe style, dietary goals, and cooking preferences.',
       icon: SlidersHorizontal,
       badge: 'Step 3',
     },

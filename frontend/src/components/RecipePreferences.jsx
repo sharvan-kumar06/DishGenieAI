@@ -168,7 +168,7 @@ export default function RecipePreferences({
           ) : (
             <>
               <Sparkles className="w-5 h-5" aria-hidden="true" />
-              <span>Generate My Recipe</span>
+              <span>Choose Dish Style & Generate</span>
             </>
           )}
         </button>

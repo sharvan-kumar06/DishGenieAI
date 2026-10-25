@@ -3,6 +3,7 @@
 *.h5
 *.tflite
 *.pt
+*.gguf
 weights/
 
 # Dependencies and build output

@@ -44,11 +44,11 @@ export default function RecipePreview() {
               <span className="font-semibold text-white tracking-wide uppercase text-[11px] bg-stone-800 px-2 py-0.5 rounded-md">
                 Example Recipe
               </span>
-              <span className="text-stone-400 hidden sm:inline">• Static UI demonstration for PBL review</span>
+              <span className="text-stone-400 hidden sm:inline">• Sample Production Output</span>
             </div>
             <div className="flex items-center gap-1.5 text-amber-300">
               <ChefHat className="w-4 h-4" />
-              <span>Future GenAI Output Format</span>
+              <span>Full Structured Synthesis Format</span>
             </div>
           </div>
 

@@ -71,6 +71,7 @@ export default function Recipe() {
         confirmedIngredients: location.state.confirmedIngredients,
         savedId: location.state.savedRecord?.id,
         isFavorite: location.state.savedRecord?.isFavorite || false,
+        selectedDish: location.state.selectedDish || location.state?.recipeRecord?.selectedDish || null,
       }
       sessionStorage.setItem('dishgenie_recipe_data', JSON.stringify(payload))
       return payload
@@ -390,6 +391,12 @@ export default function Recipe() {
           <div className="bg-white rounded-3xl border border-stone-200 shadow-xl shadow-stone-900/5 overflow-hidden">
             <div className="bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 p-6 sm:p-10 text-white relative">
               <div className="flex flex-wrap items-center gap-2 mb-3">
+                {recipePayload.selectedDish && (
+                  <span className="px-3 py-1 rounded-full bg-amber-400 text-stone-950 text-xs font-extrabold uppercase tracking-wider shadow-sm flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Style: {recipePayload.selectedDish}</span>
+                  </span>
+                )}
                 <span className="px-3 py-1 rounded-full bg-white/20 backdrop-blur-xs text-white text-xs font-bold uppercase tracking-wider">
                   🍽 {preferences?.cuisine || 'Custom'} Cuisine
                 </span>

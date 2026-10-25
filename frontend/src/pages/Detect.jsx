@@ -20,6 +20,7 @@ import {
 import {
   predictIngredient,
   generateRecipe,
+  fetchRecipeCandidates,
   INGREDIENT_EMOJIS,
   formatIngredientName,
 } from '../services/api'
@@ -29,6 +30,7 @@ import InventoryTable from '../components/InventoryTable'
 import RecipePreferences from '../components/RecipePreferences'
 import RecipeSummary from '../components/RecipeSummary'
 import RecipeRequestModal from '../components/RecipeRequestModal'
+import DishOptionsModal from '../components/DishOptionsModal'
 import LoadingState from '../components/LoadingState'
 import Toast from '../components/Toast'
 import { saveRecipeToHistory } from '../services/storage'
@@ -101,6 +103,12 @@ export default function Detect() {
   const [showPayloadModal, setShowPayloadModal] = useState(false)
   const [isGeneratingRecipe, setIsGeneratingRecipe] = useState(false)
   const [generationError, setGenerationError] = useState(false)
+
+  // Interactive Recipe Selection Flow ("Choose Your Dish Option")
+  const [dishOptions, setDishOptions] = useState([])
+  const [showOptionsModal, setShowOptionsModal] = useState(false)
+  const [selectedDishName, setSelectedDishName] = useState(null)
+  const [isLoadingCandidates, setIsLoadingCandidates] = useState(false)
 
   // Rotating UI feedback messages during generation
   const loadingStages = [
@@ -409,10 +417,34 @@ export default function Detect() {
     }, 200)
   }
 
-  // Submit complete recipe request to Local GenAI
+  // Helper to compile the active recipe request payload
+  const buildRecipePayload = () => {
+    const cookingTimeNum = Number(preferences.cookingTime) || 30
+    const servingsNum = Number(preferences.servings) || 2
+    return {
+      ingredients: [...confirmedIngredients],
+      inventory: inventory.length > 0
+        ? inventory
+        : confirmedIngredients.map((ing) => ({
+            ingredient: ing,
+            count: 1,
+            min_expiry_days: 7,
+            status: 'Fresh',
+          })),
+      preferences: {
+        diet: preferences.diet,
+        cuisine: preferences.cuisine,
+        cookingTime: cookingTimeNum,
+        difficulty: preferences.difficulty || 'Easy',
+        servings: servingsNum,
+        additionalIngredients: (preferences.additionalIngredients || '').trim(),
+      },
+    }
+  }
+
+  // Step A: Trigger Candidate Selection Modal ("Choose Your Dish Option")
   const handleGenerateRecipe = async () => {
-    // Prevent duplicate API requests caused by multiple clicks
-    if (isGeneratingRecipe) return
+    if (isGeneratingRecipe || isLoadingCandidates) return
 
     // Validate that at least one ingredient is confirmed
     if (!confirmedIngredients || confirmedIngredients.length === 0) {
@@ -423,7 +455,7 @@ export default function Detect() {
       return
     }
 
-    // Inline preference validation (Section 7)
+    // Inline preference validation
     const errs = {}
     if (!preferences.diet || !preferences.diet.trim()) {
       errs.diet = 'Please select a diet preference.'
@@ -451,32 +483,50 @@ export default function Detect() {
     setPreferenceErrors({})
     setError(null)
     setGenerationError(false)
-    setIsGeneratingRecipe(true)
 
-    const payload = {
-      ingredients: [...confirmedIngredients],
-      inventory: inventory.length > 0
-        ? inventory
-        : confirmedIngredients.map((ing) => ({
-            ingredient: ing,
-            count: 1,
-            min_expiry_days: 7,
-            status: 'Fresh',
-          })),
-      preferences: {
-        diet: preferences.diet,
-        cuisine: preferences.cuisine,
-        cookingTime: cookingTimeNum,
-        difficulty: preferences.difficulty || 'Easy',
-        servings: servingsNum,
-        additionalIngredients: (preferences.additionalIngredients || '').trim(),
-      },
-    }
-
+    const payload = buildRecipePayload()
     setRecipeRequestPayload(payload)
+    setIsLoadingCandidates(true)
+
+    // Retrieve top 3 matching database candidates
+    try {
+      const candidatesRes = await fetchRecipeCandidates(payload)
+      setIsLoadingCandidates(false)
+      if (candidatesRes?.success && candidatesRes.options && candidatesRes.options.length > 0) {
+        setDishOptions(candidatesRes.options)
+        setShowOptionsModal(true)
+      } else {
+        // Direct fallback if no candidates returned
+        executeRecipeSynthesis(payload)
+      }
+    } catch (err) {
+      console.warn('Could not fetch candidate styles, falling back directly:', err)
+      setIsLoadingCandidates(false)
+      executeRecipeSynthesis(payload)
+    }
+  }
+
+  // Step C: Execute Final Neural Synthesis for Selected Dish
+  const handleSelectDishOption = (option) => {
+    setShowOptionsModal(false)
+    const payload = recipeRequestPayload || buildRecipePayload()
+    executeRecipeSynthesis({ ...payload, selected_dish: option.name })
+  }
+
+  const handleAutoGenerateWithoutDish = () => {
+    setShowOptionsModal(false)
+    const payload = recipeRequestPayload || buildRecipePayload()
+    executeRecipeSynthesis(payload)
+  }
+
+  const executeRecipeSynthesis = async (finalPayload) => {
+    setIsGeneratingRecipe(true)
+    setGenerationError(false)
+    setError(null)
+    setSelectedDishName(finalPayload.selected_dish || null)
 
     try {
-      const result = await generateRecipe(payload)
+      const result = await generateRecipe(finalPayload)
       // Save successfully generated recipe to localStorage history
       const savedRecord = saveRecipeToHistory(result, preferences, confirmedIngredients)
       setIsGeneratingRecipe(false)
@@ -487,6 +537,7 @@ export default function Detect() {
           preferences,
           confirmedIngredients,
           savedRecord,
+          selectedDish: finalPayload.selected_dish,
         },
       })
     } catch (err) {
@@ -1113,10 +1164,12 @@ export default function Detect() {
 
             <div className="space-y-2">
               <h2 className="text-2xl sm:text-3xl font-extrabold text-stone-900 tracking-tight">
-                Creating your recipe...
+                {selectedDishName ? `Synthesizing ${selectedDishName}...` : 'Creating your recipe...'}
               </h2>
               <p className="text-xs sm:text-sm text-stone-600 max-w-sm mx-auto leading-relaxed">
-                Please wait while DishGenie prepares your recipe.
+                {selectedDishName
+                  ? 'Our AI chef is tailoring the steps and ingredients to your selection.'
+                  : 'Please wait while DishGenie prepares your recipe.'}
               </p>
             </div>
 
@@ -1219,6 +1272,17 @@ export default function Detect() {
           }}
         />
       )}
+
+      {/* INTERACTIVE RECIPE SELECTION MODAL ("Choose Your Dish Option") */}
+      <DishOptionsModal
+        isOpen={showOptionsModal}
+        onClose={() => setShowOptionsModal(false)}
+        options={dishOptions}
+        onSelectOption={handleSelectDishOption}
+        onAutoGenerate={handleAutoGenerateWithoutDish}
+        isGenerating={isGeneratingRecipe}
+        selectedDishName={selectedDishName}
+      />
 
       {/* Subtle Toast Feedback (Section 16) */}
       {toast && (

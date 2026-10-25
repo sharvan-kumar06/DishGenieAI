@@ -36,16 +36,10 @@ export default function Footer() {
               Home
             </Link>
             <Link
-              to="/how-it-works"
+              to="/detect"
               className="text-sm font-medium text-stone-400 hover:text-white transition-colors"
             >
-              How It Works
-            </Link>
-            <Link
-              to="/about"
-              className="text-sm font-medium text-stone-400 hover:text-white transition-colors"
-            >
-              About
+              Studio
             </Link>
             <Link
               to="/history"
@@ -73,7 +67,7 @@ export default function Footer() {
         <div className="mt-12 pt-8 border-t border-stone-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-stone-500">
           <p>© {new Date().getFullYear()} DishGenie. All rights reserved.</p>
           <p className="inline-flex items-center gap-1.5 text-stone-400 font-medium bg-stone-800/60 px-3 py-1.5 rounded-full border border-stone-700/60">
-            <span>Built as an AI-powered college PBL project.</span>
+            <span>Intelligent On-Device Recipe Generation System</span>
           </p>
         </div>
       </div>
