@@ -88,9 +88,11 @@ class RecipeService:
         ingredients: List[str],
         preferences: RecipePreferences,
         candidates: List[Dict[str, Any]],
+        inventory: Optional[List[Any]] = None,
     ) -> List[Dict[str, str]]:
         """
         Constructs chat messages for Qwen2.5-1.5B-Instruct.
+        Injects detected inventory items, counts, and estimated expiry days.
         Instructs the model to return strict, valid JSON with all six required recipe sections.
         """
         ing_list = ", ".join(ingredients)
@@ -105,6 +107,29 @@ class RecipeService:
             ref_text += f"\nReference Recipe {i}: {cand.get('name')}\n"
             ref_text += f"- Ingredients: {raw_ings[:180]}\n"
             ref_text += f"- Key Steps: {steps_preview[:250]}\n"
+
+        # Build inventory and freshness context
+        inventory_context = ""
+        use_first_items = []
+        if inventory:
+            inventory_lines = []
+            for item in inventory:
+                ing_name = getattr(item, "ingredient", None) or (item.get("ingredient") if isinstance(item, dict) else str(item))
+                count = getattr(item, "count", None) or (item.get("count", 1) if isinstance(item, dict) else 1)
+                expiry = getattr(item, "min_expiry_days", None) or (item.get("min_expiry_days") if isinstance(item, dict) else None)
+                status = getattr(item, "status", None) or (item.get("status", "Fresh") if isinstance(item, dict) else "Fresh")
+
+                display_name = ing_name.replace("_", " ").title()
+                expiry_text = f"{expiry}d remaining" if expiry is not None else "fresh"
+
+                if str(status).lower() in ("use first", "urgent") or (expiry is not None and expiry <= 3):
+                    use_first_items.append(display_name)
+                    inventory_lines.append(f"- {display_name}: {count} item(s) (Expiry: {expiry_text}) [PRIORITY: USE FIRST]")
+                else:
+                    inventory_lines.append(f"- {display_name}: {count} item(s) (Expiry: {expiry_text}, Status: {status})")
+
+            if inventory_lines:
+                inventory_context = "\nAvailable Inventory (Counts & Freshness):\n" + "\n".join(inventory_lines) + "\n"
 
         system_prompt = (
             "You are DishGenie, an expert culinary AI chef. Your task is to generate an authentic, "
@@ -122,21 +147,30 @@ class RecipeService:
             "  ],\n"
             '  "shopping_list": ["Item needing purchase", ...]\n'
             "}\n\n"
-            "CRITICAL CULINARY RULES:\n"
-            "1. INGREDIENT CONSISTENCY: Every single ingredient, aromatic (garlic, ginger, onions), spice "
+            "CRITICAL CULINARY & INVENTORY RULES:\n"
+            "1. FOOD WASTE PREVENTION (PRIORITIZE 'USE FIRST'): Any ingredient marked 'USE FIRST' (expiring in <= 3 days) "
+            "MUST be given highest culinary priority and actively incorporated into the main recipe.\n"
+            f"2. QUANTITY RESPECT & SHOPPING LIST SHORTFALL: Respect the user's available item counts for {preferences.servings} servings. "
+            "If the recipe requires more quantity than available (e.g., user has 1 tomato but recipe needs 3), or requires necessary "
+            "aromatics, spices, cooking oil, or garnishes not present in inventory, automatically add the shortfall or missing items to 'shopping_list'.\n"
+            "3. INGREDIENT CONSISTENCY: Every single ingredient, aromatic (garlic, ginger, onions), spice "
             "(fennel seeds, cumin, turmeric, chilli), oil, and garnish mentioned in your cooking instructions "
             "MUST be listed in the 'ingredients' array with sensible quantities.\n"
-            "2. ACTIONABLE INSTRUCTIONS: Every step in 'instructions' must be a complete, actionable cooking instruction "
-            "with realistic cooking times and temperatures. NEVER use headings or section labels (e.g. 'For the Curry:', "
-            "'Prepare Papaya:', 'Add Spices:') as instruction steps.\n"
-            f"3. DIETARY COMPLIANCE: The recipe MUST strictly comply with the user's dietary restriction: {preferences.diet}.\n"
-            f"4. CUISINE AUTHENTICITY: Maintain culinary techniques authentic to {preferences.cuisine} cuisine.\n"
-            "5. SUBSTITUTIONS: Provide ingredient-specific culinary replacements. Never suggest generic filler or allergens.\n"
-            "6. SHOPPING LIST: Derive the shopping list strictly from ingredients not already present in the user's confirmed pantry."
+            "4. ACTIONABLE INSTRUCTIONS: Every step in 'instructions' must be a complete, actionable cooking instruction "
+            "with realistic cooking times and temperatures. NEVER use headings or section labels as instruction steps.\n"
+            f"5. DIETARY COMPLIANCE: The recipe MUST strictly comply with the user's dietary restriction: {preferences.diet}.\n"
+            f"6. CUISINE AUTHENTICITY: Maintain culinary techniques authentic to {preferences.cuisine} cuisine.\n"
+            "7. SUBSTITUTIONS: Provide ingredient-specific culinary replacements. Never suggest generic filler or allergens."
         )
 
+        waste_alert = ""
+        if use_first_items:
+            waste_alert = f"\nURGENT CULINARY GOAL: Use up expiring produce ({', '.join(use_first_items)}) to avoid food waste.\n"
+
         user_prompt = (
-            f"Create a complete recipe using these detected ingredients: {ing_list}\n"
+            f"Create a complete recipe using these confirmed ingredients: {ing_list}\n"
+            f"{inventory_context}"
+            f"{waste_alert}\n"
             f"User Preferences:\n"
             f"- Diet: {preferences.diet}\n"
             f"- Cuisine: {preferences.cuisine}\n"
@@ -177,7 +211,10 @@ class RecipeService:
         if self.model is not None and self.tokenizer is not None:
             try:
                 messages = self.build_prompt_and_messages(
-                    request.ingredients, request.preferences, candidates
+                    request.ingredients,
+                    request.preferences,
+                    candidates,
+                    inventory=request.inventory,
                 )
                 text = self.tokenizer.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=True

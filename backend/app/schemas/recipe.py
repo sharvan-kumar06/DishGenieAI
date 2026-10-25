@@ -11,8 +11,16 @@ class RecipePreferences(BaseModel):
     additionalIngredients: Optional[str] = Field("", description="Optional user-provided additional ingredients")
 
 
+class InventoryItem(BaseModel):
+    ingredient: str = Field(..., description="Ingredient name")
+    count: int = Field(1, ge=1, description="Quantity/count of items detected")
+    min_expiry_days: Optional[int] = Field(None, description="Estimated days until expiration")
+    status: Optional[str] = Field("Fresh", description="Freshness status: Fresh, Medium, or Use First")
+
+
 class RecipeRequest(BaseModel):
     ingredients: List[str] = Field(..., description="List of confirmed detected ingredients")
+    inventory: Optional[List[InventoryItem]] = Field(default_factory=list, description="Structured produce inventory")
     preferences: RecipePreferences = Field(default_factory=RecipePreferences)
 
     @field_validator("ingredients")

@@ -12,6 +12,10 @@ import {
   Edit2,
   RefreshCw,
   RotateCcw,
+  Eye,
+  EyeOff,
+  Boxes,
+  Layers,
 } from 'lucide-react'
 import {
   predictIngredient,
@@ -21,6 +25,7 @@ import {
 } from '../services/api'
 import IngredientList from '../components/IngredientList'
 import IngredientSelector from '../components/IngredientSelector'
+import InventoryTable from '../components/InventoryTable'
 import RecipePreferences from '../components/RecipePreferences'
 import RecipeSummary from '../components/RecipeSummary'
 import RecipeRequestModal from '../components/RecipeRequestModal'
@@ -55,6 +60,11 @@ export default function Detect() {
   const [isPredicting, setIsPredicting] = useState(false)
   const [prediction, setPrediction] = useState(null)
   const [topPredictions, setTopPredictions] = useState(null)
+  const [inventory, setInventory] = useState([])
+  const [detections, setDetections] = useState([])
+  const [annotatedImage, setAnnotatedImage] = useState(null)
+  const [showAnnotated, setShowAnnotated] = useState(true)
+  const [totalDetectedItems, setTotalDetectedItems] = useState(0)
   const [error, setError] = useState(null)
   const [predictionFailed, setPredictionFailed] = useState(false)
   const [preferenceErrors, setPreferenceErrors] = useState({})
@@ -231,6 +241,9 @@ export default function Detect() {
     setPreviewUrl(null)
     setPrediction(null)
     setTopPredictions(null)
+    setAnnotatedImage(null)
+    setDetections([])
+    setTotalDetectedItems(0)
     setError(null)
     setPredictionFailed(false)
     setIsChanging(false)
@@ -255,12 +268,75 @@ export default function Detect() {
       const result = await predictIngredient(selectedImage)
       setPrediction(result.prediction)
       setTopPredictions(result.top_predictions)
+      setAnnotatedImage(result.annotated_image || null)
+      setDetections(result.detections || [])
+      setTotalDetectedItems(result.total_items_detected || 1)
+
+      const inv = (result.inventory && result.inventory.length > 0)
+        ? result.inventory
+        : [{
+            ingredient: result.prediction.name,
+            count: 1,
+            min_expiry_days: 7,
+            status: 'Fresh'
+          }]
+      setInventory(inv)
+
+      // Auto-populate confirmedIngredients from detected inventory
+      const detectedClasses = inv.map((item) => item.ingredient)
+      setConfirmedIngredients((prev) => {
+        const next = [...prev]
+        detectedClasses.forEach((cls) => {
+          if (!next.includes(cls)) next.push(cls)
+        })
+        return next
+      })
     } catch (err) {
       setPredictionFailed(true)
       setError(err.message || "We couldn't analyze this image.")
     } finally {
       setIsPredicting(false)
     }
+  }
+
+  // Inventory table actions
+  const handleUpdateInventory = (newInventory) => {
+    setInventory(newInventory)
+    const activeNames = newInventory.map((i) => i.ingredient)
+    setConfirmedIngredients((prev) => {
+      const next = [...prev]
+      activeNames.forEach((name) => {
+        if (!next.includes(name)) next.push(name)
+      })
+      return next
+    })
+  }
+
+  const handleRemoveInventoryItem = (nameToRemove) => {
+    setInventory((prev) => prev.filter((i) => i.ingredient !== nameToRemove))
+    handleRemoveConfirmed(nameToRemove)
+  }
+
+  const handleAddInventoryItem = (selectedClass) => {
+    if (!selectedClass) return
+    setInventory((prev) => {
+      const idx = prev.findIndex((i) => i.ingredient === selectedClass)
+      if (idx !== -1) {
+        const updated = [...prev]
+        updated[idx] = { ...updated[idx], count: (updated[idx].count || 1) + 1 }
+        return updated
+      }
+      return [
+        ...prev,
+        {
+          ingredient: selectedClass,
+          count: 1,
+          min_expiry_days: 7,
+          status: 'Fresh',
+        },
+      ]
+    })
+    handleConfirmIngredient(selectedClass)
   }
 
   // Confirm ingredient and append to multiple confirmed ingredients list
@@ -276,10 +352,33 @@ export default function Detect() {
       })
     }
 
-    // Reset current detection session slot
-    handleClearCurrentSlot()
+    // Smoothly scroll to preferences section
+    setTimeout(() => {
+      if (preferencesRef.current) {
+        preferencesRef.current.scrollIntoView({ behavior: 'smooth' })
+      }
+    }, 150)
+  }
 
-    // Smoothly scroll to preferences section if first ingredient added
+  // Confirm all detected inventory items and proceed
+  const handleConfirmAllInventory = () => {
+    if (inventory && inventory.length > 0) {
+      const activeNames = inventory.map((i) => i.ingredient)
+      setConfirmedIngredients((prev) => {
+        const next = [...prev]
+        activeNames.forEach((cls) => {
+          if (!next.includes(cls)) next.push(cls)
+        })
+        return next
+      })
+      setToast({
+        text: `Confirmed ${activeNames.length} item(s) for recipe generation!`,
+        type: 'success',
+      })
+    } else if (prediction) {
+      handleConfirmIngredient(prediction.name)
+    }
+
     setTimeout(() => {
       if (preferencesRef.current) {
         preferencesRef.current.scrollIntoView({ behavior: 'smooth' })
@@ -356,6 +455,14 @@ export default function Detect() {
 
     const payload = {
       ingredients: [...confirmedIngredients],
+      inventory: inventory.length > 0
+        ? inventory
+        : confirmedIngredients.map((ing) => ({
+            ingredient: ing,
+            count: 1,
+            min_expiry_days: 7,
+            status: 'Fresh',
+          })),
       preferences: {
         diet: preferences.diet,
         cuisine: preferences.cuisine,
@@ -727,87 +834,163 @@ export default function Detect() {
           />
         )}
 
-        {/* Prediction Results & Confirmation Area */}
+        {/* Prediction Results, Annotated Image & Inventory Confirmation Area */}
         {prediction && !isPredicting && (
-          <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="space-y-8 animate-in fade-in duration-300">
             
-            {/* Detected Ingredient Prominent Card */}
+            {/* Visual Multi-Item Detection & Bounding Boxes Preview */}
             <div className="bg-white rounded-3xl p-6 sm:p-8 border border-stone-200 shadow-xl shadow-stone-900/5">
-              <div className="flex items-center justify-between pb-4 border-b border-stone-100">
-                <span className="text-xs font-bold uppercase tracking-wider text-orange-700 bg-orange-50 px-3 py-1 rounded-full border border-orange-200">
-                  Detected Ingredient
-                </span>
-                <span className="text-xs text-stone-400">CNN Confidence Score</span>
-              </div>
-
-              <div className="py-6 flex flex-col sm:flex-row items-center justify-between gap-6">
-                <div className="flex items-center gap-5 text-center sm:text-left">
-                  <div className="w-20 h-20 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-4xl shadow-inner shrink-0">
-                    {INGREDIENT_EMOJIS[prediction.name] || '🥗'}
-                  </div>
-                  <div>
-                    <h2 className="text-3xl sm:text-4xl font-extrabold text-stone-900">
-                      {formatIngredientName(prediction.name)}
-                    </h2>
-                    <p className="text-xs text-stone-500 mt-1">
-                      Identified by trained CNN model
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex flex-col items-center sm:items-end bg-stone-50 border border-stone-200 px-5 py-3 rounded-2xl">
-                  <span className="text-xs text-stone-500 font-medium">Confidence</span>
-                  <span className="text-2xl font-black font-mono text-orange-600">
-                    {(prediction.confidence * 100).toFixed(2)}%
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-5 border-b border-stone-100 gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-orange-700 bg-orange-50 px-3 py-1.5 rounded-full border border-orange-200">
+                    <Boxes className="w-3.5 h-3.5 text-orange-600" />
+                    Multi-Object Detection & Inventory
                   </span>
+                  {totalDetectedItems > 1 ? (
+                    <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                      {totalDetectedItems} Items Isolated
+                    </span>
+                  ) : (
+                    <span className="text-xs font-bold text-stone-600 bg-stone-100 px-2.5 py-1 rounded-full">
+                      Single Item
+                    </span>
+                  )}
+                </div>
+
+                {annotatedImage && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAnnotated(!showAnnotated)}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border border-stone-200 bg-stone-50 hover:bg-stone-100 text-stone-700 transition cursor-pointer"
+                    >
+                      {showAnnotated ? (
+                        <>
+                          <EyeOff className="w-3.5 h-3.5 text-stone-500" />
+                          <span>Show Original Photo</span>
+                        </>
+                      ) : (
+                        <>
+                          <Eye className="w-3.5 h-3.5 text-orange-600" />
+                          <span>Show Bounding Boxes</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Grid: Annotated Visualizer on Left, Model Confidence on Right */}
+              <div className="mt-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                {/* Visualizer Frame */}
+                <div className="lg:col-span-6 bg-stone-950 rounded-2xl overflow-hidden border border-stone-800 shadow-inner relative flex items-center justify-center min-h-[260px] max-h-[380px]">
+                  {annotatedImage && showAnnotated ? (
+                    <img
+                      src={annotatedImage}
+                      alt="Annotated detection with bounding boxes"
+                      className="w-full h-full object-contain max-h-[380px]"
+                    />
+                  ) : (
+                    <img
+                      src={previewUrl}
+                      alt="Uploaded produce"
+                      className="w-full h-full object-contain max-h-[380px]"
+                    />
+                  )}
+                  <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
+                    <span className="text-[11px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md">
+                      {showAnnotated && annotatedImage ? 'OpenCV Contours + CNN Bounding Boxes' : 'Raw Input Photo'}
+                    </span>
+                    <span className="text-[11px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md">
+                      {totalDetectedItems} crop{totalDetectedItems > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Primary Prediction & Confidence Details */}
+                <div className="lg:col-span-6 flex flex-col justify-between space-y-4">
+                  <div className="p-5 rounded-2xl bg-amber-50/70 border border-amber-200 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="w-16 h-16 rounded-2xl bg-white border border-amber-200 flex items-center justify-center text-3xl shadow-xs shrink-0">
+                        {INGREDIENT_EMOJIS[prediction.name] || '🥗'}
+                      </div>
+                      <div>
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                          Primary Detected Class
+                        </span>
+                        <h2 className="text-2xl font-black text-stone-900 leading-tight">
+                          {formatIngredientName(prediction.name)}
+                        </h2>
+                        <p className="text-xs text-stone-500 mt-0.5">
+                          247-Class Custom CNN
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end">
+                      <span className="text-[10px] font-bold text-stone-400 uppercase">Confidence</span>
+                      <span className="text-2xl font-black font-mono text-orange-600">
+                        {(prediction.confidence * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Top 3 Alternative Candidates */}
+                  {topPredictions && topPredictions.length > 1 && (
+                    <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
+                      <h4 className="text-[11px] font-bold uppercase tracking-wider text-stone-500 mb-3">
+                        Model Ranked Candidates
+                      </h4>
+                      <div className="space-y-2.5">
+                        {topPredictions.slice(0, 3).map((cand, idx) => {
+                          const percent = (cand.confidence * 100).toFixed(1)
+                          return (
+                            <div key={cand.name} className="space-y-1">
+                              <div className="flex items-center justify-between text-xs font-semibold text-stone-700">
+                                <span className="flex items-center gap-2">
+                                  <span className="text-stone-400 font-mono text-[11px]">#{idx + 1}</span>
+                                  <span>{INGREDIENT_EMOJIS[cand.name] || '🥗'}</span>
+                                  <span>{formatIngredientName(cand.name)}</span>
+                                </span>
+                                <span className="font-mono text-stone-800">{percent}%</span>
+                              </div>
+                              <div className="w-full h-1.5 rounded-full bg-stone-200 overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all duration-500 ${
+                                    idx === 0
+                                      ? 'bg-gradient-to-r from-orange-500 to-amber-500'
+                                      : 'bg-stone-400'
+                                  }`}
+                                  style={{ width: `${Math.max(parseFloat(percent), 3)}%` }}
+                                />
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {/* Top 3 Predictions Bar Breakdown */}
-              {topPredictions && topPredictions.length > 0 && (
-                <div className="mt-2 pt-6 border-t border-stone-100">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-stone-500 mb-4">
-                    Top Predictions
-                  </h4>
-                  <div className="space-y-3">
-                    {topPredictions.map((cand, idx) => {
-                      const percent = (cand.confidence * 100).toFixed(2)
-                      return (
-                        <div key={cand.name} className="space-y-1">
-                          <div className="flex items-center justify-between text-xs font-semibold text-stone-700">
-                            <span className="flex items-center gap-2">
-                              <span>{idx + 1}.</span>
-                              <span>{INGREDIENT_EMOJIS[cand.name] || '🥗'}</span>
-                              <span>{formatIngredientName(cand.name)}</span>
-                            </span>
-                            <span className="font-mono text-stone-900">{percent}%</span>
-                          </div>
-                          <div className="w-full h-2 rounded-full bg-stone-100 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all duration-500 ${
-                                idx === 0
-                                  ? 'bg-gradient-to-r from-orange-500 to-amber-500'
-                                  : 'bg-stone-300'
-                              }`}
-                              style={{ width: `${Math.max(parseFloat(percent), 2)}%` }}
-                            />
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
+              {/* Editable Multi-Item Produce Inventory Table */}
+              <div className="mt-8 pt-6 border-t border-stone-100">
+                <InventoryTable
+                  inventory={inventory}
+                  onUpdateInventory={handleUpdateInventory}
+                  onRemoveItem={handleRemoveInventoryItem}
+                  onAddItem={handleAddInventoryItem}
+                />
+              </div>
 
-              {/* Confirmation / Correction Question */}
+              {/* Confirmation Action Bar */}
               <div className="mt-8 pt-6 border-t border-stone-100 bg-stone-50/80 p-5 rounded-2xl">
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
                   <div>
                     <h3 className="text-sm font-bold text-stone-900">
-                      Is this correct?
+                      Confirm Inventory & Recipe Setup
                     </h3>
                     <p className="text-xs text-stone-500">
-                      Confirm {formatIngredientName(prediction.name)} or select another vegetable.
+                      Counts, freshness grading, and expiry days will be injected into Qwen2.5.
                     </p>
                   </div>
 
@@ -815,11 +998,11 @@ export default function Detect() {
                     <div className="flex flex-wrap items-center gap-3">
                       <button
                         type="button"
-                        onClick={() => handleConfirmIngredient(prediction.name)}
-                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm transition-all hover:-translate-y-0.5 cursor-pointer"
+                        onClick={handleConfirmAllInventory}
+                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-md shadow-emerald-900/10 transition-all hover:-translate-y-0.5 cursor-pointer"
                       >
                         <Check className="w-4 h-4" />
-                        <span>✓ Yes, continue</span>
+                        <span>✓ Confirm & Continue</span>
                       </button>
 
                       <button
@@ -827,8 +1010,18 @@ export default function Detect() {
                         onClick={() => setIsChanging(true)}
                         className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full text-xs font-semibold text-stone-700 bg-white hover:bg-stone-100 border border-stone-300 transition-colors cursor-pointer"
                       >
-                        <Edit2 className="w-3.5 h-3.5" />
-                        <span>✎ Change</span>
+                        <Edit2 className="w-3.5 h-3.5 text-stone-500" />
+                        <span>✎ Correct Primary</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleClearCurrentSlot}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-full text-xs font-semibold text-stone-500 hover:text-stone-700 bg-transparent hover:bg-stone-200/50 transition cursor-pointer"
+                        title="Upload another photo"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Reset</span>
                       </button>
                     </div>
                   ) : (
