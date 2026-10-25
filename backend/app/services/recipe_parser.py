@@ -87,6 +87,190 @@ def parse_json_recipe(raw_text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def sanitize_text_field(text: Any, field_name: str = "") -> str:
+    """
+    Sanitizes title and description fields by stripping:
+    - stray JSON key fragments (e.g. '{"name":', 'name":', '":')
+    - leading and trailing colons, commas, escaped quotes, or bracket/brace wrappers
+    - outer matching quotes
+    """
+    if not text:
+        return ""
+    s = str(text).strip()
+    if not s:
+        return ""
+
+    # Check if s itself is a full JSON object string e.g. '{"name": "Spiced Beetroot Juice"}'
+    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, dict):
+                if field_name and field_name in parsed and parsed[field_name]:
+                    s = str(parsed[field_name]).strip()
+                elif "name" in parsed and parsed["name"]:
+                    s = str(parsed["name"]).strip()
+                elif "title" in parsed and parsed["title"]:
+                    s = str(parsed["title"]).strip()
+                elif "description" in parsed and parsed["description"]:
+                    s = str(parsed["description"]).strip()
+                elif len(parsed) == 1:
+                    s = str(list(parsed.values())[0]).strip()
+            elif isinstance(parsed, list) and len(parsed) == 1:
+                s = str(parsed[0]).strip()
+        except Exception:
+            pass
+
+    # Strip JSON key wrappers like {"name": or "name": or name": or { "description":
+    s = re.sub(
+        r'^\s*\{?\s*"?(?:name|title|description|recipe_name|summary|about)?"?\s*:\s*',
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
+
+    # Strip leading stray colons, brackets, braces, quotes, backslashes, whitespace
+    s = re.sub(r'^(?:[:\s,"\'\\\{\}\[\]]+)', "", s)
+
+    # Strip trailing closing braces, brackets, quotes, commas, colons
+    s = re.sub(r'(?:[,\s:;"\'\\\{\}\[\]]+)$', "", s)
+
+    # Normalize escaped quotes \" or \'
+    s = s.replace('\\"', '"').replace("\\'", "'")
+
+    # If wrapped in matching quotes, unwrap
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+
+    # Re-check for any stray leading colon or quote after unwrapping
+    s = re.sub(r'^[:\s,"\'\\\{\}\[\]]+', "", s).strip()
+    s = re.sub(r'[:\s,"\'\\\{\}\[\]]+$', "", s).strip()
+
+    return strip_markdown_formatting(s)
+
+
+def clean_ingredient_entry(entry: str) -> str:
+    """
+    Cleans an individual ingredient string, removing stray JSON syntax,
+    escaped quotes, or outer brackets/braces.
+    """
+    s = str(entry).strip()
+    # Strip leading/trailing JSON bracket/brace fragments
+    s = re.sub(r'^\s*\[\s*', '', s)
+    s = re.sub(r'\s*\]\s*$', '', s)
+    # Strip JSON key wrappers like "ingredient": or {"name":
+    s = re.sub(r'^\s*\{?\s*"?(?:ingredient|name|item)?"?\s*:\s*', '', s, flags=re.IGNORECASE)
+    # Strip leading/trailing punctuation and quotes
+    s = re.sub(r'^(?:[:\s,"\'\\\{\}\[\]]+)', '', s)
+    s = re.sub(r'(?:[,\s"\'\\\{\}\[\]]+)$', '', s)
+    s = s.replace('\\"', '"').replace("\\'", "'")
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1].strip()
+    return strip_markdown_formatting(s).strip()
+
+
+def parse_and_flatten_ingredients(raw_ingredients: Any) -> List[str]:
+    """
+    Extracts and flattens ingredient entries.
+    If an ingredient entry or raw_ingredients starts with a raw JSON array string
+    (e.g., '["Item 1", "Item 2"]'), automatically parses it and flattens it into
+    individual clean ingredient strings.
+    """
+    if not raw_ingredients:
+        return []
+
+    # If raw_ingredients is a single string
+    if isinstance(raw_ingredients, str):
+        s = raw_ingredients.strip()
+        if s.startswith("[") and "]" in s:
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    raw_ingredients = parsed
+                else:
+                    raw_ingredients = [s]
+            except Exception:
+                try:
+                    repaired = repair_json_string(s)
+                    parsed = json.loads(repaired)
+                    if isinstance(parsed, list):
+                        raw_ingredients = parsed
+                    else:
+                        raw_ingredients = [s]
+                except Exception:
+                    items = re.findall(r'"([^"\n]+)"|\'([^\'\n]+)\'', s)
+                    extracted = [g[0] or g[1] for g in items if (g[0] or g[1])]
+                    if extracted:
+                        raw_ingredients = extracted
+                    else:
+                        raw_ingredients = s.split("\n")
+        else:
+            raw_ingredients = s.split("\n")
+
+    flattened: List[str] = []
+
+    def process_item(item: Any):
+        if not item:
+            return
+        if isinstance(item, list):
+            for sub in item:
+                process_item(sub)
+            return
+        if isinstance(item, dict):
+            amt = item.get("amount") or item.get("quantity") or ""
+            ing = item.get("ingredient") or item.get("name") or item.get("item") or ""
+            combined = f"{amt} {ing}".strip() if amt else str(ing).strip()
+            if not combined and item:
+                combined = str(list(item.values())[0]).strip()
+            if combined:
+                cleaned = clean_ingredient_entry(combined)
+                if cleaned and len(cleaned) > 1 and not cleaned.lower().startswith(("ingredient", "instruction")):
+                    flattened.append(cleaned)
+            return
+
+        item_str = str(item).strip()
+        if not item_str:
+            return
+
+        # Check if the string itself starts with a raw JSON array: e.g. '["Item 1", "Item 2"]'
+        if item_str.startswith("[") and "]" in item_str:
+            parsed = None
+            try:
+                parsed = json.loads(item_str)
+            except Exception:
+                try:
+                    repaired = repair_json_string(item_str)
+                    parsed = json.loads(repaired)
+                except Exception:
+                    items = re.findall(r'"([^"\n]+)"|\'([^\'\n]+)\'', item_str)
+                    extracted = [g[0] or g[1] for g in items if (g[0] or g[1])]
+                    if extracted:
+                        parsed = extracted
+            if isinstance(parsed, list):
+                for sub in parsed:
+                    process_item(sub)
+                return
+
+        # Check if item_str is a single JSON object string e.g. '{"ingredient": "1 tsp cumin"}'
+        if item_str.startswith("{") and "}" in item_str:
+            try:
+                parsed = json.loads(item_str)
+                if isinstance(parsed, dict):
+                    process_item(parsed)
+                    return
+            except Exception:
+                pass
+
+        cleaned = clean_ingredient_entry(item_str)
+        if cleaned and len(cleaned) > 1 and not cleaned.lower().startswith(("ingredient", "instruction")):
+            flattened.append(cleaned)
+
+    if isinstance(raw_ingredients, (list, tuple)):
+        for elem in raw_ingredients:
+            process_item(elem)
+
+    return flattened
+
+
 def parse_section_based_text(text: str) -> Dict[str, Any]:
     """
     Fallback section parser for plain text or markdown-headed model outputs.
@@ -114,22 +298,22 @@ def parse_section_based_text(text: str) -> Dict[str, Any]:
             extracted[key] = m.group(1).strip()
 
     # Process Name
-    name = extracted.get("name", "")
+    name = sanitize_text_field(extracted.get("name", ""), field_name="name")
     if not name:
         for line in text.split("\n"):
             line = strip_markdown_formatting(line)
             if line and len(line) < 70 and not any(kw in line.lower() for kw in ["ingredient", "instruction", "step", "diet", "here is"]):
-                name = re.sub(r"^(?:RECIPE(?:\s+NAME)?:\s*)", "", line, flags=re.IGNORECASE).strip()
-                break
+                cleaned_line = re.sub(r"^(?:RECIPE(?:\s+NAME)?:\s*)", "", line, flags=re.IGNORECASE).strip()
+                name = sanitize_text_field(cleaned_line, field_name="name")
+                if name:
+                    break
+
+    # Process Description
+    description = sanitize_text_field(extracted.get("description", ""), field_name="description")
 
     # Process Ingredients
     ings_raw = extracted.get("ingredients", "")
-    ingredients: List[str] = []
-    if ings_raw:
-        for line in ings_raw.split("\n"):
-            cleaned = strip_markdown_formatting(line)
-            if cleaned and len(cleaned) > 1 and not cleaned.lower().startswith(("ingredient", "instruction")):
-                ingredients.append(cleaned)
+    ingredients = parse_and_flatten_ingredients(ings_raw)
 
     # Process Instructions
     insts_raw = extracted.get("instructions", "")
@@ -148,23 +332,18 @@ def parse_section_based_text(text: str) -> Dict[str, Any]:
             line = strip_markdown_formatting(line)
             if ":" in line:
                 p1, p2 = line.split(":", 1)
-                substitutions.append({"ingredient": p1.strip(), "replacement": p2.strip()})
+                substitutions.append({"ingredient": sanitize_text_field(p1), "replacement": sanitize_text_field(p2)})
             elif "->" in line:
                 p1, p2 = line.split("->", 1)
-                substitutions.append({"ingredient": p1.strip(), "replacement": p2.strip()})
+                substitutions.append({"ingredient": sanitize_text_field(p1), "replacement": sanitize_text_field(p2)})
 
     # Process Shopping List
     shop_raw = extracted.get("shopping_list", "")
-    shopping_list: List[str] = []
-    if shop_raw:
-        for line in shop_raw.split("\n"):
-            cleaned = strip_markdown_formatting(line)
-            if cleaned and len(cleaned) > 1:
-                shopping_list.append(cleaned)
+    shopping_list = parse_and_flatten_ingredients(shop_raw)
 
     return {
         "name": name,
-        "description": extracted.get("description", ""),
+        "description": description,
         "ingredients": ingredients,
         "instructions": instructions,
         "substitutions": substitutions,
@@ -183,17 +362,12 @@ def create_recipe_from_database_candidate(
     Uses REAL instructions (TranslatedInstructions) and REAL ingredients (TranslatedIngredients).
     Does NOT invent fake instructions. Applies full validation and reconciliation.
     """
-    name = strip_markdown_formatting(candidate.get("name", "Regional Specialty"))
+    name = sanitize_text_field(candidate.get("name", "Regional Specialty"), field_name="name")
 
     # Extract real ingredients from database record
     raw_ings = candidate.get("ingredients_raw", "")
-    ingredients: List[str] = []
-    if raw_ings:
-        for item in raw_ings.split(","):
-            cleaned = strip_markdown_formatting(item)
-            if cleaned:
-                ingredients.append(cleaned)
-    elif confirmed_ingredients:
+    ingredients: List[str] = parse_and_flatten_ingredients(raw_ings.split(",") if raw_ings else [])
+    if not ingredients and confirmed_ingredients:
         ingredients = [c.replace("_", " ").title() for c in confirmed_ingredients]
 
     # Extract real instructions from database record
@@ -264,9 +438,9 @@ def parse_recipe_text(
     if not json_data:
         json_data = parse_section_based_text(raw_text)
 
-    # Extract fields
-    name = str(json_data.get("name") or "").strip()
-    description = str(json_data.get("description") or "").strip()
+    # Extract fields with thorough JSON sanitization
+    name = sanitize_text_field(json_data.get("name") or "", field_name="name")
+    description = sanitize_text_field(json_data.get("description") or "", field_name="description")
     ingredients_raw = json_data.get("ingredients") or []
     instructions_raw = json_data.get("instructions") or []
     subs_raw = json_data.get("substitutions") or []
@@ -274,33 +448,81 @@ def parse_recipe_text(
 
     # Format substitutions list
     substitutions: List[Substitution] = []
+    if isinstance(subs_raw, str):
+        s_subs = subs_raw.strip()
+        if s_subs.startswith("[") and "]" in s_subs:
+            try:
+                parsed_subs = json.loads(s_subs)
+                if isinstance(parsed_subs, list):
+                    subs_raw = parsed_subs
+            except Exception:
+                pass
     if isinstance(subs_raw, list):
         for s in subs_raw:
             if isinstance(s, dict) and s.get("ingredient") and s.get("replacement"):
                 substitutions.append(Substitution(
-                    ingredient=strip_markdown_formatting(str(s["ingredient"])),
-                    replacement=strip_markdown_formatting(str(s["replacement"])),
+                    ingredient=sanitize_text_field(str(s["ingredient"])),
+                    replacement=sanitize_text_field(str(s["replacement"])),
                 ))
             elif isinstance(s, str) and ":" in s:
                 p1, p2 = s.split(":", 1)
                 substitutions.append(Substitution(
-                    ingredient=strip_markdown_formatting(p1),
-                    replacement=strip_markdown_formatting(p2),
+                    ingredient=sanitize_text_field(p1),
+                    replacement=sanitize_text_field(p2),
+                ))
+            elif isinstance(s, str) and "->" in s:
+                p1, p2 = s.split("->", 1)
+                substitutions.append(Substitution(
+                    ingredient=sanitize_text_field(p1),
+                    replacement=sanitize_text_field(p2),
                 ))
 
-    # Format ingredients list
-    ingredients = [strip_markdown_formatting(str(i)) for i in ingredients_raw if strip_markdown_formatting(str(i))]
+    # Format ingredients list - auto-flatten raw JSON arrays and entries
+    ingredients = parse_and_flatten_ingredients(ingredients_raw)
     if not ingredients and candidate_recipe and candidate_recipe.get("ingredients_raw"):
-        ingredients = [strip_markdown_formatting(i) for i in candidate_recipe["ingredients_raw"].split(",") if strip_markdown_formatting(i)]
+        ingredients = parse_and_flatten_ingredients(candidate_recipe["ingredients_raw"].split(","))
     elif not ingredients and fallback_ingredients:
         ingredients = [c.replace("_", " ").title() for c in fallback_ingredients]
 
-    # Format instructions list
+    # Format instructions list - flatten nested array strings if present
     instructions: List[str] = []
+    if isinstance(instructions_raw, str):
+        s_inst = instructions_raw.strip()
+        if s_inst.startswith("[") and "]" in s_inst:
+            try:
+                parsed_inst = json.loads(s_inst)
+                if isinstance(parsed_inst, list):
+                    instructions_raw = parsed_inst
+            except Exception:
+                try:
+                    repaired = repair_json_string(s_inst)
+                    parsed_inst = json.loads(repaired)
+                    if isinstance(parsed_inst, list):
+                        instructions_raw = parsed_inst
+                except Exception:
+                    pass
+        if isinstance(instructions_raw, str):
+            instructions_raw = instructions_raw.split("\n")
+
     for step in instructions_raw:
-        cleaned = clean_instruction_step(str(step))
+        step_str = str(step).strip()
+        if step_str.startswith("[") and "]" in step_str:
+            try:
+                sub_steps = json.loads(step_str)
+                if isinstance(sub_steps, list):
+                    for ss in sub_steps:
+                        cleaned = clean_instruction_step(str(ss))
+                        if cleaned:
+                            instructions.append(cleaned)
+                    continue
+            except Exception:
+                pass
+        cleaned = clean_instruction_step(step_str)
         if cleaned:
             instructions.append(cleaned)
+
+    # Format shopping list - auto-flatten array strings
+    shopping_items = parse_and_flatten_ingredients(shop_raw)
 
     # If parsing produced no valid instructions or ingredients, fall back to candidate
     if (not instructions or not ingredients) and candidate_recipe:
@@ -314,7 +536,7 @@ def parse_recipe_text(
 
     # Fallback name and description if missing
     if not name:
-        name = candidate_recipe.get("name") if candidate_recipe else "Chef's Pantry Special"
+        name = sanitize_text_field(candidate_recipe.get("name") if candidate_recipe else "Chef's Pantry Special", field_name="name")
     if not description:
         description = f"A flavorful {cuisine or 'gourmet'} dish thoughtfully balanced for a {user_diet.lower()} diet."
 
@@ -325,7 +547,7 @@ def parse_recipe_text(
         ingredients=ingredients,
         instructions=instructions,
         substitutions=substitutions,
-        shopping_list=[strip_markdown_formatting(str(s)) for s in shop_raw if strip_markdown_formatting(str(s))],
+        shopping_list=shopping_items,
     )
 
     # Step 3: Run comprehensive validation and reconciliation pass

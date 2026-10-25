@@ -18,10 +18,27 @@ class InventoryItem(BaseModel):
     status: Optional[str] = Field("Fresh", description="Freshness status: Fresh, Medium, or Use First")
 
 
+class CandidateDishOption(BaseModel):
+    id: Optional[int] = None
+    name: str = Field(..., description="Candidate recipe dish title")
+    description: Optional[str] = Field(None, description="Overview or preview of the candidate dish")
+    cuisine: Optional[str] = Field("Indian", description="Cuisine category")
+    cooking_time: Optional[int] = Field(30, description="Estimated cooking time in minutes")
+    diet: Optional[str] = Field("Vegetarian", description="Dietary classification")
+    image_url: Optional[str] = Field(None, description="Optional representative photo URL")
+    matched_ingredients: List[str] = Field(default_factory=list, description="Pantry ingredients matched in this dish")
+
+
+class CandidateOptionsResponse(BaseModel):
+    success: bool = Field(True, description="Whether candidate retrieval succeeded")
+    options: List[CandidateDishOption] = Field(default_factory=list, description="Top matching dish style options")
+
+
 class RecipeRequest(BaseModel):
     ingredients: List[str] = Field(..., description="List of confirmed detected ingredients")
     inventory: Optional[List[InventoryItem]] = Field(default_factory=list, description="Structured produce inventory")
     preferences: RecipePreferences = Field(default_factory=RecipePreferences)
+    selected_dish: Optional[str] = Field(None, description="Optional chosen dish title from candidate options")
 
     @field_validator("ingredients")
     @classmethod

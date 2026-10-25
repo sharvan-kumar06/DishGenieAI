@@ -333,6 +333,23 @@ A rich and aromatic North Indian stir-fry dish bursting with roasted spices and 
         self.assertTrue(len(res.recipe.instructions) > 0)
         self.assertTrue(len(res.recipe.shopping_list) > 0)
 
+    def test_recipe_service_candidate_options(self):
+        from app.services.recipe_service import RecipeService
+
+        service = RecipeService(load_weights=False)
+        req = RecipeRequest(
+            ingredients=["karela"],
+            preferences=RecipePreferences(diet="Vegetarian", cuisine="Indian"),
+        )
+        candidates = service.get_candidate_options(req, limit=3)
+        self.assertGreaterEqual(len(candidates), 1)
+        self.assertLessEqual(len(candidates), 3)
+        for opt in candidates:
+            self.assertTrue(len(opt["id"]) > 0)
+            self.assertTrue(len(opt["name"]) > 0)
+            self.assertTrue(len(opt["description"]) > 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
