@@ -2,6 +2,8 @@
 
 *.h5
 *.tflite
+*.pt
+weights/
 
 # Dependencies and build output
 node_modules/

@@ -62,7 +62,7 @@ export default function InventoryTable({
             </h3>
           </div>
           <p className="text-xs text-stone-500 mt-1">
-            Deterministic counting and visual decay grading from OpenCV analysis
+            Two-stage instance localization and deterministic freshness grading
           </p>
         </div>
 

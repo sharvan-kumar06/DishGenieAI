@@ -165,15 +165,46 @@ def split_elongated_or_large_box(
     return [box1, box2]
 
 
+# Global cached YOLO detector instance
+_YOLO_DETECTOR = None
+_YOLO_LOAD_FAILED = False
+
+
+def get_yolo_rpn_detector():
+    """
+    Returns cached lightweight YOLO detector as class-agnostic Region Proposal Network (RPN).
+    First attempts YOLO('yolov8s-worldv2.pt') with produce vocabulary;
+    falls back to YOLO('yolov8n.pt'), and falls back to OpenCV Watershed if offline.
+    """
+    global _YOLO_DETECTOR, _YOLO_LOAD_FAILED
+    if _YOLO_DETECTOR is not None:
+        return _YOLO_DETECTOR
+    if _YOLO_LOAD_FAILED:
+        return None
+    try:
+        from ultralytics import YOLO
+        try:
+            detector = YOLO("yolov8s-worldv2.pt")
+            detector.set_classes(["fruit", "vegetable", "food", "produce"])
+            logger.info("[ItemSegmenter] Loaded YOLOv8s-WorldV2 with produce vocabulary.")
+        except Exception as e:
+            logger.warning(f"[ItemSegmenter] YOLO-World initialization failed, falling back to yolov8n.pt: {e}")
+            detector = YOLO("yolov8n.pt")
+            logger.info("[ItemSegmenter] Loaded YOLOv8n lightweight detector.")
+        _YOLO_DETECTOR = detector
+        return _YOLO_DETECTOR
+    except Exception as err:
+        logger.warning(f"[ItemSegmenter] Ultralytics YOLO not available, using OpenCV Watershed: {err}")
+        _YOLO_LOAD_FAILED = True
+        return None
+
+
 class ItemSegmenter:
     """
-    Deterministic Computer Vision pipeline for multi-item segmentation:
-      1. Border-sampled Background Estimation in LAB + HSV space
-      2. Distance-based Foreground Segmentation + Morphological Opening (MORPH_OPEN)
-      3. Distance Transform (DIST_L2) peak detection (> 0.45 * max)
-      4. cv2.watershed Contact Line Splitting for touching produce
-      5. Geometry & Color Splitting for elongated or oversized composite boxes
-      6. Clean fallback to full image for single items
+    Two-Stage Hybrid Instance Localization & Computer Vision Engine:
+      - Stage 1: Pretrained Deep Learning Region Proposal Network (YOLO conf=0.15, iou=0.45)
+                 used strictly as class-agnostic bounding-box localizer.
+      - Fallback: OpenCV Watershed + CLAHE valley separation for dense touching piles.
     """
 
     def __init__(
@@ -187,6 +218,62 @@ class ItemSegmenter:
         self.max_area_ratio = max_area_ratio
         self.min_dim_ratio = min_dim_ratio
         self.peak_ratio = peak_ratio
+
+    def propose_regions_yolo(
+        self,
+        image_rgb: np.ndarray,
+        conf: float = 0.15,
+        iou: float = 0.45,
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Stage 1: Pretrained Instance Localization (Region Proposal Network).
+        Uses a lightweight pretrained detector as a Class-Agnostic Region Proposal Network (RPN).
+        Detects individual fruit/vegetable instances in dense or overlapping piles (conf=0.15, iou=0.45).
+        Completely ignores YOLO's predicted class labels.
+        """
+        detector = get_yolo_rpn_detector()
+        if detector is None or image_rgb is None or image_rgb.size == 0:
+            return []
+
+        h, w = image_rgb.shape[:2]
+        total_pixels = float(h * w)
+        min_area = max(250, int(total_pixels * 0.015))
+
+        try:
+            results = detector.predict(image_rgb, conf=conf, iou=iou, verbose=False)
+            if not results or len(results) == 0 or results[0].boxes is None:
+                return []
+
+            boxes_xyxy = results[0].boxes.xyxy.cpu().numpy()
+            if len(boxes_xyxy) == 0:
+                return []
+
+            proposed_boxes: List[Tuple[int, int, int, int]] = []
+            for box in boxes_xyxy:
+                x1, y1, x2, y2 = box
+                bx = max(0, int(round(x1)))
+                by = max(0, int(round(y1)))
+                bw = min(w - bx, int(round(x2 - x1)))
+                bh = min(h - by, int(round(y2 - y1)))
+
+                area = bw * bh
+                if area < min_area:
+                    continue
+                # If multiple boxes were detected, filter out full-image proposals that encompass the scene
+                if len(boxes_xyxy) > 1 and (area / total_pixels) > 0.90:
+                    continue
+
+                proposed_boxes.append((bx, by, bw, bh))
+
+            # Limit maximum counted units to 12
+            if len(proposed_boxes) > 12:
+                proposed_boxes.sort(key=lambda b: b[2] * b[3], reverse=True)
+                proposed_boxes = proposed_boxes[:12]
+
+            return proposed_boxes
+        except Exception as e:
+            logger.warning(f"[ItemSegmenter] YOLO RPN inference error: {e}")
+            return []
 
     @staticmethod
     def estimate_background_colors(image_rgb: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -600,19 +687,37 @@ class ItemSegmenter:
         image_rgb: np.ndarray,
     ) -> Tuple[List[Tuple[int, int, int, int]], Dict[str, Any]]:
         """
-        Two-Mode Counting Strategy:
-          a) Separated Objects Mode: When foreground consists of 2+ distinct separated contours
-             with background visible between them (e.g. Tomato + Potato), returns exact contour
-             boxes for independent CNN classification.
-          b) Dense Homogeneous Pile Mode: When 1 large foreground contour covers > 45% of image area,
-             uses CLAHE valley separation + smoothed distance transform peaks to isolate individual
-             items inside the pile (clamped to 2-12 units).
+        Two-Stage Hybrid Localization Strategy:
+          - Stage 1: Pretrained Deep Learning Region Proposal Network (YOLO conf=0.15, iou=0.45)
+            for high-accuracy individual instance proposals in both separated items and dense piles.
+          - Fallback: Deterministic OpenCV Watershed & CLAHE valley separation (if offline or synthetic).
         """
         if image_rgb is None or image_rgb.size == 0:
             return [], {"is_pile": False, "peak_count": 0, "fg_ratio": 0.0}
 
         h, w = image_rgb.shape[:2]
         total_pixels = float(h * w)
+
+        # 0. Stage 1: Pretrained Deep Learning Region Proposal Network (RPN)
+        yolo_boxes = self.propose_regions_yolo(image_rgb, conf=0.15, iou=0.45)
+        if yolo_boxes:
+            logger.info(
+                f"[ItemSegmenter] Stage 1 YOLO RPN proposed {len(yolo_boxes)} instance bounding boxes."
+            )
+            max_pairwise_iou = 0.0
+            if len(yolo_boxes) > 1:
+                for i in range(len(yolo_boxes)):
+                    for j in range(i + 1, len(yolo_boxes)):
+                        max_pairwise_iou = max(max_pairwise_iou, calculate_iou(yolo_boxes[i], yolo_boxes[j]))
+
+            is_pile = (len(yolo_boxes) > 1 and max_pairwise_iou >= 0.15)
+            pile_info = {
+                "is_pile": is_pile,
+                "peak_count": len(yolo_boxes),
+                "fg_ratio": 0.50 if is_pile else 0.25,
+                "method": "yolo_rpn",
+            }
+            return yolo_boxes, pile_info
 
         # 1. Clean foreground mask
         fg_mask = self.create_foreground_mask(image_rgb)

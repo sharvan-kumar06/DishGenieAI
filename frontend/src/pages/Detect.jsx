@@ -899,7 +899,7 @@ export default function Detect() {
                   )}
                   <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
                     <span className="text-[11px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md">
-                      {showAnnotated && annotatedImage ? 'OpenCV Contours + CNN Bounding Boxes' : 'Raw Input Photo'}
+                      {showAnnotated && annotatedImage ? 'Two-Stage Hybrid: Region Proposal + 247-Class Custom CNN' : 'Raw Input Photo'}
                     </span>
                     <span className="text-[11px] font-mono text-white/90 bg-black/60 backdrop-blur-xs px-2.5 py-1 rounded-md">
                       {totalDetectedItems} crop{totalDetectedItems > 1 ? 's' : ''}

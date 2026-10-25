@@ -455,6 +455,51 @@ class TestVisionServiceMultiObjectInference(unittest.TestCase):
         self.assertIn(res_bgr_auto["estimated_expiry_days"], [6, 7])
         self.assertNotEqual(res_bgr_auto["status"], "Use First")
 
+    def test_two_stage_hybrid_localization_and_custom_cnn_classification(self):
+        # Verification of Two-Stage Hybrid Pipeline:
+        # Stage 1 proposes boxes as a class-agnostic RPN; Stage 2 classifies every box using custom 247-class CNN.
+        service = VisionService()
+        service.class_names = ["bitter_gourd", "potato", "tomato", "capsicum"]
+
+        mock_segmenter = ItemSegmenter()
+        # Mock Stage 1 YOLO RPN proposals for a dense pile of 4 overlapping bitter gourds
+        proposed_boxes = [
+            (50, 50, 120, 100),
+            (140, 60, 110, 110),
+            (60, 140, 120, 100),
+            (150, 150, 110, 110),
+        ]
+        mock_segmenter.propose_regions_yolo = MagicMock(return_value=proposed_boxes)
+        service.segmenter = mock_segmenter
+
+        mock_model = MagicMock()
+        service.model = mock_model
+
+        # Full image anchor is bitter_gourd (0.92)
+        prob_bg = np.array([[0.92, 0.03, 0.03, 0.02]], dtype=np.float32)
+        # Conflicted crop prediction (e.g. low-confidence capsicum 0.40)
+        prob_capsicum = np.array([[0.20, 0.10, 0.10, 0.40]], dtype=np.float32)
+
+        call_count = {"count": 0}
+
+        def mock_predict_fn(batch, verbose=0):
+            call_count["count"] += 1
+            if call_count["count"] == 1:
+                return prob_bg
+            return prob_capsicum
+
+        mock_model.predict.side_effect = mock_predict_fn
+
+        dummy_img = np.full((300, 300, 3), 200, dtype=np.uint8)
+        result = service.predict(dummy_img)
+
+        # Stage 1 proposed 4 items, and Stage 2 snapped the conflicted/low-conf crops to bitter_gourd
+        self.assertEqual(result["total_items_detected"], 4)
+        self.assertEqual(len(result["inventory"]), 1)
+        self.assertEqual(result["inventory"][0]["ingredient"], "bitter_gourd")
+        self.assertEqual(result["inventory"][0]["count"], 4)
+        self.assertEqual(len(result["detections"]), 4)
+
 
 class TestRecipePromptInjection(unittest.TestCase):
     def test_prompt_includes_inventory_and_use_first(self):

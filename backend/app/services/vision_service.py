@@ -276,8 +276,8 @@ class VisionService:
             )
             for box in candidate_boxes:
                 bx, by, bw, bh = box
-                # Extract square context crop (25% margin on all sides)
-                crop = self.segmenter.get_square_context_crop(image_rgb, box, margin_ratio=0.25)
+                # Extract crop with 15% context padding
+                crop = self.segmenter.get_square_context_crop(image_rgb, box, margin_ratio=0.15)
                 if crop.shape[0] < 20 or crop.shape[1] < 20:
                     continue
 
@@ -292,29 +292,40 @@ class VisionService:
                         is_spatially_separated = False
                         break
 
-                # Global-Local Consistency Gate:
-                # Rule 1: When multiple crops are spatially separated (IoU < 0.15),
-                # NEVER overwrite a crop's class with Full-Image Top-1 if crop's own CNN confidence is >= 55%
-                if is_spatially_separated and crop_prim["confidence"] >= 0.55:
-                    assigned_name = crop_prim["name"]
-                    assigned_conf = crop_prim["confidence"]
-                elif is_pile:
-                    # In Dense Homogeneous Pile Mode (Potato, Papaya, Carrot, Bitter Gourd):
-                    # Use the Full-Image Top-1 CNN prediction as the class for the pile
-                    assigned_name = anchor_class
-                    assigned_conf = anchor_confidence
-                else:
-                    if crop_prim["name"] in full_top3_names:
+                # Stage 2: 247-Class Custom CNN Classification with Global-Local Consistency Gate
+                if is_spatially_separated:
+                    # Spatially separated items (e.g. Tomato + Potato side by side)
+                    # Never overwrite if crop's own CNN confidence is >= 55%
+                    if crop_prim["confidence"] >= 0.55:
                         assigned_name = crop_prim["name"]
                         assigned_conf = crop_prim["confidence"]
-                    elif crop_prim["name"] in full_top5_names and crop_prim["confidence"] >= 0.55:
+                    elif crop_prim["name"] in full_top3_names:
+                        assigned_name = crop_prim["name"]
+                        assigned_conf = crop_prim["confidence"]
+                    else:
+                        assigned_name = anchor_class
+                        assigned_conf = anchor_confidence
+                elif is_pile:
+                    # Homogeneous pile (overlapping boxes):
+                    # If crop prediction is low confidence or conflicts with Global Top-1, snap to Global Top-1
+                    if crop_prim["name"] == anchor_class and crop_prim["confidence"] >= 0.60:
+                        assigned_name = anchor_class
+                        assigned_conf = crop_prim["confidence"]
+                    else:
+                        logger.info(
+                            f"[VisionService] Snapping pile crop '{crop_prim['name']}' ({crop_prim['confidence']:.2f}) "
+                            f"to Global Top-1 Anchor '{anchor_class}'."
+                        )
+                        assigned_name = anchor_class
+                        assigned_conf = anchor_confidence
+                else:
+                    if crop_prim["name"] in full_top3_names:
                         assigned_name = crop_prim["name"]
                         assigned_conf = crop_prim["confidence"]
                     elif crop_prim["confidence"] >= 0.55:
                         assigned_name = crop_prim["name"]
                         assigned_conf = crop_prim["confidence"]
                     else:
-                        # Hallucinated texture -> assign anchor class
                         assigned_name = anchor_class
                         assigned_conf = anchor_confidence
 
